@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "model": "current",
+  "thinking": "high",
+  "memoryBudgetTokens": 32000,
+  "triggers": {
+    "contextPercent": 80,
+    "elapsedMinutes": 40,
+    "minimumToolCalls": 25
+  },
+  "runOnManualCompaction": true,
+  "maxAttempts": 3
+}
