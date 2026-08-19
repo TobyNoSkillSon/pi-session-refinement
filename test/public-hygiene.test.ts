@@ -17,11 +17,11 @@ async function sourceFiles(path: string): Promise<string[]> {
 	return files;
 }
 
-test("public project files contain no personal absolute paths or identities", async () => {
+test("public project files contain no personal absolute paths or private runtime configuration", async () => {
 	for (const path of await sourceFiles(projectRoot)) {
 		const content = await readFile(path, "utf8");
 		assert.doesNotMatch(content, new RegExp(`/${"Users"}/`), path);
-		assert.doesNotMatch(content, new RegExp(["toby", "noskillson"].join(""), "i"), path);
+		assert.doesNotMatch(content, /openai-codex\/gpt-5\.6-(?:luna|terra)/i, path);
 	}
 });
 
