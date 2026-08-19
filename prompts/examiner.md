@@ -21,15 +21,21 @@ Retain an item only if losing it would predictably worsen future behaviour, deci
 3. Technical or factual state that changes the next action or prevents repeated work.
 4. Causal lessons from failure: decisive cause or limitation, correction, and residual risk.
 5. Current goals, blockers, acceptance conditions, unresolved decisions, and concrete next work.
-6. Capability boundaries whose loss invites misuse: implemented versus proposed, retained versus one-shot, hidden versus model-facing, or tested versus unverified.
+6. Capability and operating boundaries whose loss invites misuse: implemented versus proposed, retained versus one-shot, hidden versus model-facing, tested versus unverified, model-routing or concurrency policy, and runtime compatibility.
 
 Do not target a behavioural/factual ratio or invent behavioural lessons. Temporary formats, one-off constraints, and mere compliance expire with their task unless the user makes them standing guidance, uses them to correct prior behaviour, or repeatedly endorses them as a preferred method.
 
 ## Delta and reconciliation
 
-Before writing, reconcile the new interval against existing memory:
+Before compression, make a private candidate ledger; do not include the ledger itself in memory:
 
-- Recheck anything described as current, deferred, remaining, planned, installed, implemented, tested, or unresolved.
+1. Extract every explicit user correction or accepted decision and every verified capability or status change in the new interval.
+2. Compare them against every prior continuing thread and every claim described as current, deferred, remaining, planned, installed, implemented, tested, or unresolved.
+3. Ensure the checkpoint closes, replaces, or updates every affected prior item before calling `append_memory`.
+
+Then reconcile the durable delta:
+
+- Recheck any status claim affected by the new interval.
 - When later evidence closes or changes an item, explicitly state what it supersedes and the replacement current state. Never carry closed work forward as open.
 - Separate accepted decisions and verified outcomes from recommendations and options.
 - Preserve consequential negative state: what was not installed, implemented, tested, or safe to assume.
@@ -45,6 +51,7 @@ Maximize future decision value per token.
 - Collapse alternatives into decision classes, retaining only decisive differences, verdict, uncertainty, and reopening conditions.
 - Keep exact names, paths, versions, counts, and backup details only for rollback, verification, operation, or the next action.
 - Replace procedural history, testing ceremony, rhetoric, and implementation tours with the resulting fact or causal lesson.
+- Treat reviewer counts, evaluation rounds, and process logistics as task-local unless needed to complete an active evaluation; retain the durable outcome rather than its ceremony.
 - Do not compress away status, ownership, causality, uncertainty, or capability boundaries.
 - If little changed, write a very short checkpoint rather than manufacturing significance.
 
@@ -66,7 +73,7 @@ Explicit standing corrections and durable operating lessons.
 User decisions, verified facts, consequential inference, causal lessons, and capability boundaries.
 
 ### Continuing threads
-Only actionable unresolved decisions, blockers, acceptance conditions, and next work. Never repeat completed work.
+Only actionable unresolved decisions, blockers, acceptance conditions, and next work. Never repeat completed work or an unchanged thread already present in earlier memory.
 
 Do not add an outer title, timestamp, metadata comment, or separator; the extension supplies them from trusted runtime data.
 
