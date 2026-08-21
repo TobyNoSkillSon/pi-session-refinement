@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Show animated refinement and rebuild progress above the editor without occupying the footer.
+- Add cancellable, serialized reconstruction with prompt waiting and rollback when state publication fails.
+- Propagate compaction cancellation into examiner work and prevent stale operations from clearing newer progress.
+
 ## 0.1.0
 
 - Initial implementation of chronological session-local refinement memory.

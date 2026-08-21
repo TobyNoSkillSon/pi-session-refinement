@@ -30,6 +30,12 @@ function entryMessages(entries: SessionEntry[]): Parameters<typeof convertToLlm>
 	return messages;
 }
 
+
+export function initialSessionBaseline(branchEntries: SessionEntry[]): string | undefined {
+	if (branchEntries.some((entry) => entry.type === "message")) return undefined;
+	return [...branchEntries].reverse().find((entry) => typeof entry.id === "string")?.id;
+}
+
 export function buildTranscriptSegment(options: {
 	branchEntries: SessionEntry[];
 	lastProcessedEntryId?: string;

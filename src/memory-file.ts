@@ -91,7 +91,7 @@ export async function appendCheckpoint(options: {
 		throw new BudgetExceededError(options.paths.pending, estimatedTokens);
 	}
 	await atomicWrite(options.paths.memory, next);
-	await rm(options.paths.pending, { force: true });
+	try { await rm(options.paths.pending, { force: true }); } catch { /* stale pending cleanup is non-fatal */ }
 	return { content: next, estimatedTokens };
 }
 

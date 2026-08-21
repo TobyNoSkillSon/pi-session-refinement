@@ -16,11 +16,16 @@ import type {
 	RefinementConfig,
 } from "./types.js";
 
+export type ExaminerProgressEvent =
+	| { type: "attempt"; model: string; attempt: number; maximum: number; fallback: boolean }
+	| { type: "fallback"; model: string };
+
 export interface ExaminerCallbacks {
 	appendMemory(body: string, modelReference: string): Promise<void>;
 	warning(message: string): void;
 	missingConfiguredModel(reference: string): Promise<void>;
 	configuredModelAvailable(): Promise<void>;
+	progress?(event: ExaminerProgressEvent): void;
 }
 
 function canonicalModel(model: Model<any>): string {
@@ -117,6 +122,7 @@ async function runOneAttempt(options: {
 		}),
 		async execute(_toolCallId, params) {
 			if (appended) throw new Error("A checkpoint was already appended during this examination.");
+			if (options.signal?.aborted) throw new Error("Examination cancelled before checkpoint commit.");
 			try {
 				await options.appendMemory(params.body, canonicalModel(options.model));
 				appended = true;
@@ -150,7 +156,7 @@ async function runOneAttempt(options: {
 	const abort = () => { void session.abort(); };
 	options.signal?.addEventListener("abort", abort, { once: true });
 	try {
-		if (options.signal?.aborted) void session.abort();
+		if (options.signal?.aborted) return { appended: false, usage: combineUsage(messages), error: "Examination cancelled." };
 		await session.prompt(buildExaminerTask(options.request));
 		if (!appended) return { appended: false, usage: combineUsage(messages), error: appendError ?? "Examiner finished without calling append_memory.", budgetExceeded };
 		return { appended: true, usage: combineUsage(messages) };
@@ -174,7 +180,7 @@ export async function runExaminer(options: {
 	callbacks: ExaminerCallbacks;
 	signal?: AbortSignal;
 }): Promise<ExaminationResult> {
-	const configured = options.config.model === "current"
+	const configured = options.config.model === "current" || options.config.model === canonicalModel(options.currentModel)
 		? options.currentModel
 		: resolveConfiguredModel(options.config.model, options.registry);
 	if (!configured) {
@@ -192,9 +198,16 @@ export async function runExaminer(options: {
 	let lastError: string | undefined;
 	let aggregateUsage: Usage | undefined;
 	for (const candidate of candidates) {
-		if (candidate.fallback) options.callbacks.warning(`Session refinement is falling back to ${canonicalModel(candidate.model)}.`);
+		if (options.signal?.aborted) break;
+		const modelReference = canonicalModel(candidate.model);
+		if (candidate.fallback) {
+			options.callbacks.progress?.({ type: "fallback", model: modelReference });
+			options.callbacks.warning(`Session refinement is falling back to ${modelReference}.`);
+		}
 		for (let attempt = 1; attempt <= options.config.maxAttempts; attempt++) {
+			if (options.signal?.aborted) break;
 			attempts++;
+			options.callbacks.progress?.({ type: "attempt", model: modelReference, attempt, maximum: options.config.maxAttempts, fallback: candidate.fallback });
 			const result = await runOneAttempt({
 				cwd: options.cwd,
 				agentDir: options.agentDir,
@@ -217,5 +230,13 @@ export async function runExaminer(options: {
 		if (options.signal?.aborted) break;
 		options.callbacks.warning(`Session refinement failed with ${canonicalModel(candidate.model)} after ${options.config.maxAttempts} attempts: ${lastError ?? "unknown error"}`);
 	}
-	return { ok: false, appended: false, attempts, fallbackUsed: candidates.some((entry) => entry.fallback), usage: aggregateUsage, error: lastError ?? "No usable examiner model." };
+	return {
+		ok: false,
+		appended: false,
+		cancelled: options.signal?.aborted || undefined,
+		attempts,
+		fallbackUsed: candidates.some((entry) => entry.fallback),
+		usage: aggregateUsage,
+		error: options.signal?.aborted ? "Examination cancelled." : lastError ?? "No usable examiner model.",
+	};
 }

@@ -12,7 +12,7 @@ Pi Session Refinement belongs only to a persistent interactive Pi session. A ses
 4. `agent_settled` checks context-percentage and elapsed-time/activity triggers.
 5. `session_before_compact` awaits any background examiner and examines unprocessed material before Pi summarizes it.
 6. `session_compact` activates the newest on-disk memory version.
-7. `session_shutdown` aborts background work and performs no new model calls.
+7. `session_shutdown` cancels background work in ordinary interactive Pi. Agent Runner roles drain an already-started post-turn checkpoint before disposal so the next one-turn worker cannot overlap it.
 
 ## Examiner
 

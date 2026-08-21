@@ -85,6 +85,7 @@ export interface ExaminationUsageRecord {
 export interface ExaminationResult {
 	ok: boolean;
 	appended: boolean;
+	cancelled?: boolean;
 	budgetExceeded?: boolean;
 	usedModel?: string;
 	attempts: number;

@@ -16,6 +16,10 @@ After the configured elapsed time and minimum root tool results, the examiner pr
 
 At the configured context percentage, the extension requests compaction. `session_before_compact` is awaited by Pi, so the examiner completes, exhausts retries, or skips before normal Pi compaction proceeds. Manual `/compact` follows the same ordering.
 
+## Progress and interaction
+
+Model-backed refinement displays a non-modal animated indicator above the editor. Background checkpoints do not block conversation. Resume processing finishes before the first response, while Pi queues submissions during compaction. Reconstruction behaves as a foreground maintenance operation: the editor remains usable, submitted prompts wait, and Escape cancels before the replacement commit begins.
+
 ## Budget
 
 When a complete proposed checkpoint would exceed the configured budget, active memory is unchanged and the proposed block is written to `pending.md`. A persistent warning instructs the root agent to consult the user before editing, compressing, merging, or deleting memory.

@@ -12,8 +12,6 @@ export async function budgetRootInstruction(): Promise<string> {
 export function notifyPersistentWarnings(ctx: ExtensionContext, warnings: PersistentWarning[], extra: string[] = []): void {
 	for (const issue of extra) ctx.ui.notify(`[Session Refinement] ${issue}`, "warning");
 	for (const warning of warnings) ctx.ui.notify(`[Session Refinement] ${warning.message}`, "warning");
-	const status = [...extra, ...warnings.map((warning) => warning.message)][0];
-	ctx.ui.setStatus("pi-session-refinement", status ? `⚠ ${status}` : undefined);
 }
 
 export function appendWarningInstructions(systemPrompt: string, warnings: PersistentWarning[]): string {

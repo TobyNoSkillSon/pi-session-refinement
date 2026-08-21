@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildReconstructionSegments } from "../src/reconstruct.ts";
-import { buildTranscriptSegment, CursorNotOnBranchError } from "../src/session-history.ts";
+import { buildTranscriptSegment, CursorNotOnBranchError, initialSessionBaseline } from "../src/session-history.ts";
 
 const message = (id: string, parentId: string | null, content: string) => ({
 	type: "message", id, parentId, timestamp: "2026-01-01T00:00:00Z",
@@ -31,4 +31,11 @@ test("historical reconstruction advances at compaction boundaries", () => {
 	assert.equal(segments.length, 2);
 	assert.match(segments[0].text, /one/);
 	assert.match(segments[1].text, /two/);
+});
+
+
+test("new-session baseline stops before the first user message", () => {
+	const metadataOnly = [{ type: "session", id: "session" }, { type: "model_change", id: "model" }] as any[];
+	assert.equal(initialSessionBaseline(metadataOnly), "model");
+	assert.equal(initialSessionBaseline([...metadataOnly, message("first", "model", "Initial governing request")]), undefined);
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -48,6 +48,24 @@ test("preserves an over-budget checkpoint as pending without changing active mem
 		}), BudgetExceededError);
 		assert.equal(await readMemory(paths.memory), "");
 		assert.match(await readFile(paths.pending, "utf8"), /x{20}/);
+	} finally {
+		await rm(agentDir, { recursive: true, force: true });
+	}
+});
+
+
+test("stale pending cleanup cannot invalidate a published checkpoint", async () => {
+	const agentDir = await temporaryAgentDir();
+	try {
+		const paths = getSessionPaths(agentDir, "session-c");
+		await mkdir(paths.pending, { recursive: true });
+		await appendCheckpoint({
+			paths,
+			body: "### Current-state corrections\n\n- Checkpoint committed.",
+			record: { throughEntryId: "entry-1", createdAt: "2026-01-01T00:00:00Z", trigger: "time" },
+			budgetTokens: 32_000,
+		});
+		assert.match(await readMemory(paths.memory), /Checkpoint committed/);
 	} finally {
 		await rm(agentDir, { recursive: true, force: true });
 	}

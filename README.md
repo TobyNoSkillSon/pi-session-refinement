@@ -12,6 +12,7 @@ The extension runs only in persistent interactive root sessions. Spawned childre
 - Early compaction at a configurable context percentage, with awaited examination before unprocessed material is discarded
 - Fork inheritance restricted to checkpoints on the forked branch
 - Chronological reconstruction through `/session-refinement-rebuild`
+- Non-modal animated progress above the editor during examination and reconstruction
 - Three examiner attempts, optional fallback to the current session model, and persistent warnings
 - Configurable 32K-token default budget with no automatic deletion
 - Non-context usage records for external accounting
@@ -86,7 +87,7 @@ Run this command for a session that predates installation or needs a clean histo
 /session-refinement-rebuild
 ```
 
-The command processes the current branch in chronological segments divided by recorded compactions. It replaces active memory only after every segment succeeds.
+The command processes the current branch in chronological segments divided by recorded compactions. An animated indicator reports segment, model, attempt, fallback, and commit progress above the editor. Press Escape to cancel. Submitted prompts wait for the rebuild, and active memory changes only after every segment succeeds.
 
 ## Failure policy
 
