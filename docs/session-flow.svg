@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="650" viewBox="0 0 760 650" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision" text-rendering="optimizeLegibility">
+  <title id="title">Session refinement across two compactions</title>
+  <desc id="desc">A compact dark timeline shows conversation, two memory refinements, two compactions, and accumulated checkpoints.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#c9d1d9" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { fill:#f0f6fc; font-family:Arial, Helvetica, sans-serif; }
+      .flow { fill:none; stroke:#c9d1d9; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+      .soft { fill:none; stroke:#6e7681; stroke-width:1.2; stroke-linecap:round; }
+      .bubble { fill:#161b22; stroke:#8b949e; stroke-width:1.5; }
+      .pi { fill:#1f2733; stroke:#c9d1d9; }
+      .file { fill:#161b22; stroke:#c9d1d9; stroke-width:1.5; rx:8; }
+      .note { fill:#21262d; stroke:#6e7681; stroke-width:1.2; rx:6; }
+      .lane { font-size:10.5px; font-weight:700; letter-spacing:1.3px; fill:#8b949e; }
+      .label { font-size:9.5px; font-weight:700; letter-spacing:.55px; }
+      .body { font-size:11px; }
+      .small { font-size:9.5px; fill:#b1bac4; }
+      .mono { font-family:"SFMono-Regular", Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+
+  <rect width="760" height="650" fill="#0d1117"/>
+  <text x="43" y="22" class="lane">CHAT</text>
+  <text x="570" y="22" class="lane">SESSION MEMORY</text>
+  <path d="M55 34 L55 628" class="soft" marker-end="url(#arrow)"/>
+
+  <!-- Cycle 1: conversation -->
+  <circle cx="55" cy="54" r="3" fill="#f0f6fc"/>
+  <text x="86" y="43" class="label">YOU</text>
+  <rect x="80" y="47" width="155" height="22" rx="7" class="bubble"/>
+
+  <circle cx="55" cy="91" r="3" fill="#f0f6fc"/>
+  <text x="86" y="80" class="label">PI</text>
+  <rect x="80" y="84" width="200" height="26" rx="8" class="bubble pi"/>
+
+  <rect x="105" y="120" width="120" height="18" rx="9" class="note"/>
+  <text x="165" y="133" text-anchor="middle" class="small mono">tool activity</text>
+
+  <circle cx="55" cy="153" r="3" fill="#f0f6fc"/>
+  <text x="86" y="142" class="label">YOU</text>
+  <rect x="80" y="146" width="155" height="22" rx="7" class="bubble"/>
+
+  <circle cx="55" cy="190" r="3" fill="#f0f6fc"/>
+  <text x="86" y="179" class="label">PI</text>
+  <rect x="80" y="183" width="210" height="26" rx="8" class="bubble pi"/>
+
+  <!-- Cycle 1: memory advances -->
+  <rect x="570" y="38" width="150" height="48" class="file"/>
+  <text x="584" y="57" class="label mono">memory.md</text>
+  <text x="584" y="76" class="body">Checkpoint 1</text>
+  <path d="M645 88 L645 102" class="flow" marker-end="url(#arrow)"/>
+
+  <rect x="570" y="107" width="150" height="34" class="note"/>
+  <text x="645" y="122" text-anchor="middle" class="label">REFINE</text>
+  <text x="645" y="135" text-anchor="middle" class="small">append checkpoint 2</text>
+  <path d="M645 143 L645 155" class="flow" marker-end="url(#arrow)"/>
+  <path d="M282 97 C410 97, 475 124, 565 124" class="flow" marker-end="url(#arrow)"/>
+  <text x="430" y="90" text-anchor="middle" class="small">trigger met</text>
+
+  <rect x="570" y="160" width="150" height="56" class="file"/>
+  <text x="584" y="178" class="label mono">memory.md</text>
+  <text x="584" y="196" class="body">Checkpoint 1</text>
+  <text x="584" y="211" class="body">+ Checkpoint 2</text>
+  <text x="570" y="232" class="small mono">file 2 · prompt 1</text>
+  <path d="M645 218 L645 244" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Compaction 1 -->
+  <path d="M25 248 L735 248" class="flow"/>
+  <rect x="367" y="237" width="112" height="22" fill="#0d1117"/>
+  <text x="423" y="252" text-anchor="middle" class="lane">COMPACTION 1</text>
+  <path d="M645 260 L645 264" class="flow" marker-end="url(#arrow)"/>
+
+  <rect x="80" y="267" width="380" height="72" rx="9" class="bubble pi"/>
+  <text x="95" y="285" class="lane">PI CONTEXT 1</text>
+  <text x="95" y="303" class="label">SYSTEM PROMPT</text>
+  <text x="220" y="303" class="small">abbreviated instructions</text>
+  <text x="95" y="319" class="label">SESSION MEMORY</text>
+  <text x="220" y="319" class="small">checkpoints 1 + 2</text>
+  <text x="95" y="335" class="label">COMPACTION RESULT</text>
+  <text x="220" y="335" class="small">summary + retained turns</text>
+
+  <rect x="570" y="267" width="150" height="66" class="file"/>
+  <text x="584" y="286" class="label mono">memory.md</text>
+  <text x="584" y="306" class="body">Checkpoints 1 + 2</text>
+  <text x="584" y="324" class="small">persists on disk</text>
+  <path d="M565 315 L464 315" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Cycle 2: more conversation -->
+  <circle cx="55" cy="371" r="3" fill="#f0f6fc"/>
+  <text x="86" y="360" class="label">YOU</text>
+  <rect x="80" y="364" width="155" height="22" rx="7" class="bubble"/>
+
+  <circle cx="55" cy="408" r="3" fill="#f0f6fc"/>
+  <text x="86" y="397" class="label">PI</text>
+  <rect x="80" y="401" width="200" height="26" rx="8" class="bubble pi"/>
+
+  <rect x="105" y="437" width="120" height="18" rx="9" class="note"/>
+  <text x="165" y="450" text-anchor="middle" class="small mono">tool activity</text>
+
+  <circle cx="55" cy="470" r="3" fill="#f0f6fc"/>
+  <text x="86" y="459" class="label">YOU</text>
+  <rect x="80" y="463" width="155" height="22" rx="7" class="bubble"/>
+
+  <circle cx="55" cy="507" r="3" fill="#f0f6fc"/>
+  <text x="86" y="496" class="label">PI</text>
+  <rect x="80" y="500" width="210" height="26" rx="8" class="bubble pi"/>
+
+  <!-- Cycle 2: memory advances again -->
+  <path d="M645 335 L645 365" class="flow" marker-end="url(#arrow)"/>
+  <rect x="570" y="370" width="150" height="34" class="note"/>
+  <text x="645" y="385" text-anchor="middle" class="label">REFINE AGAIN</text>
+  <text x="645" y="398" text-anchor="middle" class="small">append checkpoint 3</text>
+  <path d="M645 406 L645 424" class="flow" marker-end="url(#arrow)"/>
+  <path d="M282 414 C410 414, 475 387, 565 387" class="flow" marker-end="url(#arrow)"/>
+
+  <rect x="570" y="429" width="150" height="58" class="file"/>
+  <text x="584" y="447" class="label mono">memory.md</text>
+  <text x="584" y="465" class="body">Checkpoints 1 + 2</text>
+  <text x="584" y="481" class="body">+ Checkpoint 3</text>
+  <text x="570" y="503" class="small mono">file 3 · prompt 2</text>
+  <path d="M645 489 L645 536" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Compaction 2 -->
+  <path d="M25 540 L735 540" class="flow"/>
+  <rect x="367" y="529" width="112" height="22" fill="#0d1117"/>
+  <text x="423" y="544" text-anchor="middle" class="lane">COMPACTION 2</text>
+  <path d="M645 552 L645 556" class="flow" marker-end="url(#arrow)"/>
+
+  <rect x="80" y="559" width="380" height="72" rx="9" class="bubble pi"/>
+  <text x="95" y="577" class="lane">PI CONTEXT 2</text>
+  <text x="95" y="595" class="label">SYSTEM PROMPT</text>
+  <text x="220" y="595" class="small">abbreviated instructions</text>
+  <text x="95" y="611" class="label">SESSION MEMORY</text>
+  <text x="220" y="611" class="small">checkpoints 1 + 2 + 3</text>
+  <text x="95" y="627" class="label">COMPACTION RESULT</text>
+  <text x="220" y="627" class="small">new summary + retained turns</text>
+
+  <rect x="570" y="559" width="150" height="72" class="file"/>
+  <text x="584" y="578" class="label mono">memory.md</text>
+  <text x="584" y="598" class="body">Checkpoints 1 + 2 + 3</text>
+  <text x="584" y="618" class="small">persists on disk</text>
+  <path d="M565 607 L464 607" class="flow" marker-end="url(#arrow)"/>
+</svg>

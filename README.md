@@ -1,35 +1,39 @@
 # Pi Session Refinement
 
-Pi Session Refinement gives each persistent Pi conversation a chronological memory. A configurable examiner turns new conversation intervals into checkpoints. Pi restores them on resume and keeps injected memory stable between activation points so prompt caches remain reusable.
+Pi Session Refinement gives each saved Pi conversation its own chronological memory. A configurable refinement model summarizes new stretches of conversation as checkpoints. Pi loads the latest memory after compaction or when the session resumes, while ordinary turns keep using the same prompt snapshot.
 
 The extension runs only in persistent interactive root sessions. Spawned children and `--no-session` runs cannot create refinement memory.
+
+## What happens during a session
+
+While you work, a background checkpoint becomes eligible only when the time threshold has passed and the root session has produced the configured number of tool results. The refinement model reads the current memory and the conversation since the previous checkpoint, then appends one block to `memory.md`. Refinement makes extra model calls, but it does not interrupt your conversation.
+
+`memory.md` can advance while the current prompt keeps using its existing memory snapshot. Pi uses the new snapshot after compaction, when you resume or fork a session, or after a successful rebuild. If Pi continues the same run immediately after compaction, the extension supplies the newly appended checkpoint on every model call until the next fresh prompt carries the full snapshot.
+
+![Pi Session Refinement across two compaction cycles](docs/session-flow.svg)
+
+[View the behavior checklist](docs/session-flow-ascii.md).
 
 ## Features
 
 - Separate `memory.md` for each session, preserved across resume and compaction
 - Configurable examiner model and thinking level, resolved through Pi's model registry
 - Background checkpoints gated by both elapsed time and root tool activity
-- Early compaction at a configurable context percentage, with awaited examination before unprocessed material is discarded
+- Early compaction at a configurable context percentage, with refinement completed before unprocessed material leaves active context
 - Fork inheritance restricted to checkpoints on the forked branch
 - Chronological reconstruction through `/session-refinement-rebuild`
-- Non-modal animated progress above the editor during examination and reconstruction
-- Three examiner attempts, optional fallback to the current session model, and persistent warnings
+- Non-modal animated progress above the editor during refinement and reconstruction
+- Configurable examiner attempts (three by default), optional fallback to the current session model, and persistent warnings
 - Configurable 32K-token default budget with no automatic deletion
-- Non-context usage records for external accounting
+- Examiner usage records kept outside model context for token and cost accounting
 
-## Install
+## Use it
 
-Install directly from GitHub:
+Give this repository URL to your coding agent:
 
-```bash
-pi install git:github.com/TobyNoSkillSon/pi-session-refinement
-```
+`https://github.com/TobyNoSkillSon/pi-session-refinement`
 
-Or install a local checkout:
-
-```bash
-pi install /path/to/pi-session-refinement
-```
+Tell it you want Pi Session Refinement. It can inspect your Pi setup and take it from there.
 
 ## Configuration
 
@@ -75,13 +79,13 @@ These files stay outside the installed package and repository.
 
 ## Memory format
 
-The examiner receives the existing memory, one new chronological interval, runtime metadata, and the source-entry range. Its only tool is `append_memory`. The extension owns checkpoint boundaries and timestamps, then commits the complete block atomically.
+The refinement model receives the existing memory, one unprocessed chronological interval, and runtime metadata. Its only tool is `append_memory`. The extension supplies the interval boundaries and timestamp, then commits the complete block atomically.
 
 Normal checkpoints are append-only. Later checkpoints must explicitly supersede outdated claims; the extension never silently deletes history.
 
 ## Reconstruction
 
-Run this command for a session that predates installation or needs a clean historical rebuild:
+Run this command to rebuild a session's memory from its recorded history:
 
 ```text
 /session-refinement-rebuild
@@ -91,7 +95,7 @@ The command processes the current branch in chronological segments divided by re
 
 ## Failure policy
 
-Refinement errors do not block Pi. Persistent problems produce warnings on each user turn. The extension retries up to the configured limit, falls back to a different current-session model when available, and otherwise skips the failed interval.
+Refinement errors do not block Pi. Broken state, an unavailable configured model, a required rebuild, or budget overflow produce warnings on later turns. The extension retries examiner failures up to the configured limit, then tries the current session model when it is different and available. If every attempt fails, the cursor stays unchanged so a later eligible run can try the same interval again.
 
 If a checkpoint exceeds the memory budget, the extension saves it to `pending.md` and leaves active memory unchanged.
 

@@ -19,6 +19,10 @@ export default function sessionRefinement(pi: ExtensionAPI): void {
 		controller.toolResult();
 	});
 
+	pi.on("context", async (event) => {
+		return controller.contextMessages(event.messages);
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
 		try {
 			const systemPrompt = await controller.beforeAgentStart(ctx, event.systemPrompt);

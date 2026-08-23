@@ -22,6 +22,10 @@ The examiner model is resolved from the parent session's current ModelRegistry. 
 
 A timed checkpoint updates `memory.md` on disk but not the in-process injected snapshot. The snapshot changes only after compaction, resume, fork bootstrap, or reconstruction. Therefore ordinary turns between those events receive byte-identical session memory.
 
+## Immediate continuation after compaction
+
+Pi can rebuild message context and call `agent.continue()` without firing `before_agent_start` again. In that case, the system prompt still contains the older session-memory snapshot. The `context` hook supplies the appended checkpoint as a non-persistent custom message on every model call in the continued run. The next fresh prompt injects the full current memory into the system prompt and removes the need for that temporary update. Non-append replacements wait for the next fresh prompt so stale system memory is never presented as replaced by a lower-priority context message.
+
 ## Persistence
 
 `memory.md` is chronological model-facing content. Machine cursor metadata is stored in hidden HTML comments and removed before prompt injection. `state.json` stores counters, warning state, the last processed session entry, and checkpoint records. Raw Pi JSONL remains canonical evidence.

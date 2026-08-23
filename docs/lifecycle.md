@@ -14,7 +14,7 @@ After the configured elapsed time and minimum root tool results, the examiner pr
 
 ## Context and manual compaction
 
-At the configured context percentage, the extension requests compaction. `session_before_compact` is awaited by Pi, so the examiner completes, exhausts retries, or skips before normal Pi compaction proceeds. Manual `/compact` follows the same ordering.
+At the configured context percentage, the extension requests compaction. `session_before_compact` is awaited by Pi, so refinement completes, exhausts retries, or skips before normal Pi compaction proceeds. Manual `/compact` follows the same ordering. If Pi immediately continues the same agent run, a temporary context message supplies the newly appended checkpoint on every model call; the next fresh prompt carries the full snapshot in its system prompt.
 
 ## Progress and interaction
 

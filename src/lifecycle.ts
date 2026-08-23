@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import type { Model } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ContextEvent, ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { loadConfig, type LoadedConfig } from "./config.js";
@@ -37,6 +37,7 @@ import type {
 } from "./types.js";
 import { recordExaminerUsage } from "./usage.js";
 import { appendWarningInstructions, budgetRootInstruction, notifyPersistentWarnings } from "./warnings.js";
+import { buildMemoryOverlay } from "./memory-overlay.js";
 
 function sha256(text: string): string {
 	return createHash("sha256").update(text).digest("hex");
@@ -60,6 +61,7 @@ export class RefinementController {
 	private state?: SessionRefinementState;
 	private loadedConfig?: LoadedConfig;
 	private injectedMemory = "";
+	private promptMemorySnapshot = "";
 	private currentRun?: Promise<ExaminationResult>;
 	private foregroundRun?: Promise<boolean>;
 	private foregroundAbort?: AbortController;
@@ -84,6 +86,7 @@ export class RefinementController {
 		this.state = undefined;
 		this.loadedConfig = undefined;
 		this.injectedMemory = "";
+		this.promptMemorySnapshot = "";
 		this.currentRun = undefined;
 		this.foregroundRun = undefined;
 		this.foregroundAbort = undefined;
@@ -152,7 +155,16 @@ export class RefinementController {
 		let result = systemPrompt;
 		const memory = renderMemoryForPrompt(this.injectedMemory);
 		if (memory) result += `\n\n<session_memory>\n${memory}\n</session_memory>`;
+		this.promptMemorySnapshot = memory;
 		return appendWarningInstructions(result, this.state.warnings);
+	}
+
+	contextMessages(messages: ContextEvent["messages"]): { messages: ContextEvent["messages"] } | undefined {
+		if (!this.active) return undefined;
+		const activeMemory = renderMemoryForPrompt(this.injectedMemory);
+		const overlay = buildMemoryOverlay(this.promptMemorySnapshot, activeMemory);
+		if (!overlay) return undefined;
+		return { messages: [...messages, overlay.message] };
 	}
 
 	private async handleFirstPrompt(ctx: ExtensionContext): Promise<void> {
