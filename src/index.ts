@@ -4,7 +4,7 @@ import { RefinementController } from "./lifecycle.js";
 
 function warn(ctx: ExtensionContext, error: unknown): void {
 	const message = error instanceof Error ? error.message : String(error);
-	ctx.ui.notify(`[Session Refinement] ${message}`, "warning");
+	try { ctx.ui.notify(`[Session Refinement] ${message}`, "warning"); } catch { /* lifecycle errors must remain fail-open */ }
 }
 
 export default function sessionRefinement(pi: ExtensionAPI): void {

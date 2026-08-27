@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Prevent stale or disposed extension UI contexts from crashing Pi when asynchronous compaction or background refinement fails.
 - Show animated refinement and rebuild progress above the editor without occupying the footer.
 - Add cancellable, serialized reconstruction with prompt waiting and rollback when state publication fails.
 - Propagate compaction cancellation into examiner work and prevent stale operations from clearing newer progress.

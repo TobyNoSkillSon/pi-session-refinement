@@ -47,6 +47,17 @@ function localTime(date: Date): string {
 	return new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "long" }).format(date);
 }
 
+function captureNotifier(ctx: ExtensionContext): ExtensionContext["ui"]["notify"] {
+	try {
+		const ui = ctx.ui;
+		return (message, type) => {
+			try { ui.notify(message, type); } catch { /* UI may be disposed after session replacement */ }
+		};
+	} catch {
+		return () => {};
+	}
+}
+
 function rootModel(ctx: ExtensionContext): Model<any> | undefined {
 	return ctx.model as Model<any> | undefined;
 }
@@ -211,11 +222,12 @@ export class RefinementController {
 		if (!this.contextCompactionRequested && usage?.percent !== null && usage?.percent !== undefined
 			&& usage.percent >= this.loadedConfig.config.triggers.contextPercent) {
 			this.contextCompactionRequested = true;
+			const notify = captureNotifier(ctx);
 			ctx.compact({
 				onComplete: () => { this.contextCompactionRequested = false; },
 				onError: (error) => {
 					this.contextCompactionRequested = false;
-					ctx.ui.notify(`[Session Refinement] Early compaction failed: ${error.message}`, "warning");
+					notify(`[Session Refinement] Early compaction failed: ${error.message}`, "warning");
 				},
 			});
 			return;
@@ -241,9 +253,10 @@ export class RefinementController {
 			await saveState(this.paths, this.state);
 			return;
 		}
+		const notify = captureNotifier(ctx);
 		this.currentRun = this.runExamination(segment, "time", ctx, false)
 			.catch((error): ExaminationResult => {
-				ctx.ui.notify(`[Session Refinement] Background examination failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+				notify(`[Session Refinement] Background examination failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 				return { ok: false, appended: false, attempts: 0, fallbackUsed: false, error: error instanceof Error ? error.message : String(error) };
 			})
 			.finally(() => { this.currentRun = undefined; });
