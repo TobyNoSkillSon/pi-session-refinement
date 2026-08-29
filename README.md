@@ -8,7 +8,7 @@ The extension runs only in persistent interactive root sessions. Spawned childre
 
 While you work, a background checkpoint becomes eligible only when the time threshold has passed and the root session has produced the configured number of tool results. The refinement model reads the current memory and the conversation since the previous checkpoint, then appends one block to `memory.md`. Refinement makes extra model calls, but it does not interrupt your conversation.
 
-`memory.md` can advance while the current prompt keeps using its existing memory snapshot. Pi uses the new snapshot after compaction, when you resume or fork a session, or after a successful rebuild. If Pi continues the same run immediately after compaction, the extension supplies the newly appended checkpoint on every model call until the next fresh prompt carries the full snapshot.
+`memory.md` can advance while the current prompt keeps using its existing memory snapshot. Pi uses the new snapshot after compaction, when you resume or fork a session, or after a successful rebuild. If Pi continues the same run immediately after compaction, the extension supplies the newly appended checkpoint on every model call until the next fresh prompt carries the full snapshot. If a short session ends before its first checkpoint, the extension can create one when the session resumes.
 
 ![Pi Session Refinement across two compaction cycles](docs/session-flow.svg)
 
@@ -23,7 +23,7 @@ While you work, a background checkpoint becomes eligible only when the time thre
 - Fork inheritance restricted to checkpoints on the forked branch
 - Chronological reconstruction through `/session-refinement-rebuild`
 - Non-modal animated progress above the editor during refinement and reconstruction
-- Configurable examiner attempts (three by default), optional fallback to the current session model, and persistent warnings
+- Configurable examiner attempts (three by default), automatic fallback to the current session model when available, and persistent warnings
 - Configurable 32K-token default budget with no automatic deletion
 - Examiner usage records kept outside model context for token and cost accounting
 
@@ -95,7 +95,7 @@ The command processes the current branch in chronological segments divided by re
 
 ## Failure policy
 
-Refinement errors do not block Pi. Broken state, an unavailable configured model, a required rebuild, or budget overflow produce warnings on later turns. The extension retries examiner failures up to the configured limit, then tries the current session model when it is different and available. If every attempt fails, the cursor stays unchanged so a later eligible run can try the same interval again.
+Refinement errors do not block Pi. Broken state, an unavailable configured model, a required rebuild, or budget overflow produce warnings on later turns. On resume, the extension checks checkpoint metadata and cursor alignment, and verifies that each recorded checkpoint still has a body. A structural mismatch stops refinement and asks for a rebuild instead of appending to damaged memory. The extension retries examiner failures up to the configured limit, then tries the current session model when it is different and available. If every attempt fails, the cursor stays unchanged so a later eligible run can try the same interval again.
 
 If a checkpoint exceeds the memory budget, the extension saves it to `pending.md` and leaves active memory unchanged.
 
