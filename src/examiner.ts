@@ -130,7 +130,6 @@ async function runOneAttempt(options: {
 			} catch (error) {
 				appendError = error instanceof Error ? error.message : String(error);
 				budgetExceeded = error instanceof BudgetExceededError;
-				if (budgetExceeded) throw error;
 				throw error;
 			}
 		},

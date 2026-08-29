@@ -20,7 +20,7 @@ export default function sessionRefinement(pi: ExtensionAPI): void {
 	});
 
 	pi.on("context", async (event) => {
-		return controller.contextMessages(event.messages);
+		try { return controller.contextMessages(event.messages); } catch { return undefined; }
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {

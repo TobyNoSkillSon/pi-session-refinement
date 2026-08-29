@@ -31,6 +31,10 @@ function entryMessages(entries: SessionEntry[]): Parameters<typeof convertToLlm>
 }
 
 
+export function countToolResults(entries: SessionEntry[]): number {
+	return entries.filter((entry) => entry.type === "message" && entry.message.role === "toolResult").length;
+}
+
 export function initialSessionBaseline(branchEntries: SessionEntry[]): string | undefined {
 	if (branchEntries.some((entry) => entry.type === "message")) return undefined;
 	return [...branchEntries].reverse().find((entry) => typeof entry.id === "string")?.id;

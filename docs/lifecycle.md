@@ -6,7 +6,7 @@ A new persistent session starts with no memory. Trigger counters begin at startu
 
 ## Resume
 
-Existing memory is loaded before the first model response. If memory has a valid cursor and the branch contains a new tail, the examiner processes that tail synchronously before injection. Historical sessions with no refinement files receive a persistent rebuild warning rather than incurring unrequested reconstruction cost.
+Existing memory is loaded before the first model response. If state has a valid cursor and the branch contains a new tail, the examiner processes that tail synchronously before injection; this can create the first checkpoint after a short session resumes. State that records checkpoints without its matching memory file is treated as broken. Historical sessions with no refinement files receive a persistent rebuild warning rather than incurring unrequested reconstruction cost.
 
 ## Timed checkpoints
 

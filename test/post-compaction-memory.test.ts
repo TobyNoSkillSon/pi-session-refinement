@@ -187,6 +187,24 @@ test("extension registers the post-compaction provider-context bridge", () => {
 	assert.equal(typeof handlers.get("session_compact"), "function");
 });
 
+
+test("provider-context bridge remains fail-open if overlay preparation throws", async () => {
+	const handlers = new Map<string, Function>();
+	const original = RefinementController.prototype.contextMessages;
+	RefinementController.prototype.contextMessages = function () { throw new Error("synthetic overlay failure"); };
+	try {
+		sessionRefinement({
+			on(name: string, handler: Function) { handlers.set(name, handler); },
+			registerCommand() {},
+		} as any);
+		const handler = handlers.get("context");
+		assert.ok(handler);
+		assert.equal(await handler({ messages: [{ role: "user", content: "unchanged" }] }), undefined);
+	} finally {
+		RefinementController.prototype.contextMessages = original;
+	}
+});
+
 const FAKE_MODEL: Model<any> = {
 	id: "synthetic",
 	name: "Synthetic",

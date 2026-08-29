@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildReconstructionSegments } from "../src/reconstruct.ts";
-import { buildTranscriptSegment, CursorNotOnBranchError, initialSessionBaseline } from "../src/session-history.ts";
+import { buildTranscriptSegment, countToolResults, CursorNotOnBranchError, initialSessionBaseline } from "../src/session-history.ts";
 
 const message = (id: string, parentId: string | null, content: string) => ({
 	type: "message", id, parentId, timestamp: "2026-01-01T00:00:00Z",
@@ -38,4 +38,18 @@ test("new-session baseline stops before the first user message", () => {
 	const metadataOnly = [{ type: "session", id: "session" }, { type: "model_change", id: "model" }] as any[];
 	assert.equal(initialSessionBaseline(metadataOnly), "model");
 	assert.equal(initialSessionBaseline([...metadataOnly, message("first", "model", "Initial governing request")]), undefined);
+});
+
+test("counts only tool-result messages", () => {
+	const toolResult = (id: string) => ({
+		type: "message", id, parentId: null, timestamp: "2026-01-01T00:00:00Z",
+		message: { role: "toolResult", toolCallId: id, toolName: "probe", content: [], isError: false, timestamp: 1 },
+	}) as any;
+	const entries = [
+		message("user", null, "request"),
+		toolResult("result-1"),
+		{ type: "compaction", id: "compact" },
+		toolResult("result-2"),
+	] as any[];
+	assert.equal(countToolResults(entries), 2);
 });

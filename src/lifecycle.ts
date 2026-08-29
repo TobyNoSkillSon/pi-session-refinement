@@ -14,11 +14,12 @@ import { runExaminer } from "./examiner.js";
 import {
 	BudgetExceededError,
 	getSessionPaths,
+	parseCheckpoints,
 	readMemory,
 	renderMemoryForPrompt,
 } from "./memory-file.js";
 import { buildReconstructionSegments } from "./reconstruct.js";
-import { buildTranscriptSegment, initialSessionBaseline } from "./session-history.js";
+import { buildTranscriptSegment, countToolResults, initialSessionBaseline } from "./session-history.js";
 import {
 	clearWarning,
 	createInitialState,
@@ -45,6 +46,24 @@ function sha256(text: string): string {
 
 function localTime(date: Date): string {
 	return new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "long" }).format(date);
+}
+
+
+function checkpointStateMatches(memory: string, state: SessionRefinementState): boolean {
+	const actual = parseCheckpoints(memory);
+	if (actual.length !== state.checkpoints.length) return false;
+	if (state.checkpoints.length > 0 && state.lastProcessedEntryId !== state.checkpoints.at(-1)?.throughEntryId) return false;
+	return state.checkpoints.every((record, index) => {
+		const candidate = actual[index];
+		const heading = `## Memory checkpoint — ${record.createdAt}`;
+		if (!candidate?.block.includes(heading)) return false;
+		const body = candidate.block.slice(candidate.block.indexOf(heading) + heading.length).trim();
+		return Boolean(body)
+			&& candidate.record.fromEntryId === record.fromEntryId
+			&& candidate.record.throughEntryId === record.throughEntryId
+			&& candidate.record.createdAt === record.createdAt
+			&& candidate.record.trigger === record.trigger;
+	});
 }
 
 function captureNotifier(ctx: ExtensionContext): ExtensionContext["ui"]["notify"] {
@@ -126,6 +145,7 @@ export class RefinementController {
 				this.state = inherited.state;
 				this.injectedMemory = inherited.memory;
 				this.stateExisted = inherited.inherited > 0;
+				this.state.lastAttemptAt = new Date().toISOString();
 				await saveState(this.paths, this.state);
 			} else {
 				const loaded = await loadState(this.paths, this.sessionId);
@@ -203,7 +223,11 @@ export class RefinementController {
 			await saveState(this.paths, this.state);
 			return;
 		}
-		if (!this.state.lastProcessedEntryId || !this.injectedMemory) return;
+		if (!checkpointStateMatches(this.injectedMemory, this.state)) {
+			await this.markBroken(new Error("Checkpoint metadata in state.json does not match memory.md."));
+			return;
+		}
+		if (!this.state.lastProcessedEntryId || (!this.injectedMemory && !this.stateExisted)) return;
 		try {
 			const segment = buildTranscriptSegment({ branchEntries: branch, lastProcessedEntryId: this.state.lastProcessedEntryId });
 			if (segment) {
@@ -292,7 +316,11 @@ export class RefinementController {
 		const trigger: TriggerReason = contextTriggered
 			? "context"
 			: event.reason === "manual" ? "manual-compaction" : "auto-compaction";
-		await this.runExamination(segment, trigger, ctx, false, event.signal);
+		const firstKeptIndex = event.branchEntries.findIndex((entry) => entry.id === event.preparation.firstKeptEntryId);
+		const retainedToolCalls = firstKeptIndex >= 0
+			? countToolResults(event.branchEntries.slice(firstKeptIndex))
+			: 0;
+		await this.runExamination(segment, trigger, ctx, false, event.signal, retainedToolCalls);
 	}
 
 	async afterCompact(): Promise<void> {
@@ -424,15 +452,22 @@ export class RefinementController {
 		}
 	}
 
+	private recordAttemptCompletion(state: SessionRefinementState, toolCallsAtStart: number, postRunToolCalls: number): void {
+		const toolCallsDuringRun = Math.max(0, state.toolCallsSinceRun - toolCallsAtStart);
+		state.lastAttemptAt = new Date().toISOString();
+		state.toolCallsSinceRun = postRunToolCalls + toolCallsDuringRun;
+	}
+
 	private async runExamination(
 		segment: TranscriptSegment,
 		trigger: TriggerReason,
 		ctx: ExtensionContext,
 		activate: boolean,
 		signal?: AbortSignal,
+		postRunToolCalls = 0,
 	): Promise<ExaminationResult> {
 		if (!this.paths || !this.state) return { ok: false, appended: false, attempts: 0, fallbackUsed: false, error: "Session state unavailable." };
-		return this.runExaminationWithTarget(segment, trigger, ctx, this.paths, this.state, activate, signal);
+		return this.runExaminationWithTarget(segment, trigger, ctx, this.paths, this.state, activate, signal, undefined, undefined, postRunToolCalls);
 	}
 
 	private async runExaminationWithTarget(
@@ -445,6 +480,7 @@ export class RefinementController {
 		externalSignal?: AbortSignal,
 		providedActivity?: ActivityHandle,
 		baseOverride?: string,
+		postRunToolCalls = 0,
 	): Promise<ExaminationResult> {
 		if (!this.loadedConfig || !this.sessionId) return { ok: false, appended: false, attempts: 0, fallbackUsed: false, error: "Configuration unavailable." };
 		const model = rootModel(ctx);
@@ -453,6 +489,7 @@ export class RefinementController {
 		const activity = providedActivity ?? this.activity.begin(ctx, base);
 		const ownsActivity = providedActivity === undefined;
 		const linked = linkAbortSignals([this.abortController.signal, externalSignal]);
+		const toolCallsAtStart = state.toolCallsSinceRun;
 		try {
 			if (linked.signal.aborted) return { ok: false, appended: false, cancelled: true, attempts: 0, fallbackUsed: false, error: "Examination cancelled." };
 			const previousMemory = await readMemory(paths.memory);
@@ -535,8 +572,7 @@ Pending checkpoint: ${paths.pending}`,
 				signal: linked.signal,
 			});
 			if (!result.cancelled) {
-				state.lastAttemptAt = new Date().toISOString();
-				state.toolCallsSinceRun = 0;
+				this.recordAttemptCompletion(state, toolCallsAtStart, postRunToolCalls);
 				await saveState(paths, state);
 				recordExaminerUsage({ pi: this.pi, trigger, config, result });
 			}
