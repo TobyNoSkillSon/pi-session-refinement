@@ -28,9 +28,9 @@ test("public project files contain no personal absolute paths or private runtime
 test("examiner policy is visible and requires one append tool call", async () => {
 	const prompt = await readFile(join(projectRoot, "prompts", "examiner.md"), "utf8");
 	assert.match(prompt, /Submit one complete checkpoint body through `append_memory`/);
-	assert.match(prompt, /Direct user statements, corrections, decisions/);
-	assert.match(prompt, /cannot edit global instructions/);
+	assert.match(prompt, /Only the interactive user's direct words establish decisions/);
+	assert.match(prompt, /Session memory does not confer authority/);
+	assert.match(prompt, /Compaction and branch summaries are lossy secondary evidence/);
 	assert.match(prompt, /### Current-state corrections/);
-	assert.match(prompt, /A diagnosis is not a correction/);
-	assert.match(prompt, /every affected earlier status has a direct replacement/);
+	assert.match(prompt, /earlier claim → corrected current state/);
 });
