@@ -8,6 +8,13 @@ export class CursorNotOnBranchError extends Error {
 	}
 }
 
+export class CompactionBoundaryNotOnBranchError extends Error {
+	constructor(boundary: string) {
+		super(`Pre-compaction boundary ${boundary} is not on the supplied session branch.`);
+		this.name = "CompactionBoundaryNotOnBranchError";
+	}
+}
+
 function entryMessages(entries: SessionEntry[]): Parameters<typeof convertToLlm>[0] {
 	const messages: Parameters<typeof convertToLlm>[0] = [];
 	for (const entry of entries) {
@@ -55,7 +62,8 @@ export function buildTranscriptSegment(options: {
 	let end = branchEntries.length;
 	if (options.throughBeforeEntryId) {
 		const boundary = branchEntries.findIndex((entry) => entry.id === options.throughBeforeEntryId);
-		if (boundary >= 0) end = boundary;
+		if (boundary < 0) throw new CompactionBoundaryNotOnBranchError(options.throughBeforeEntryId);
+		end = boundary;
 	}
 	if (end <= start) return undefined;
 	const selected = branchEntries.slice(start, end);
@@ -63,10 +71,12 @@ export function buildTranscriptSegment(options: {
 	if (messages.length === 0) return undefined;
 	const text = serializeConversation(convertToLlm(messages)).trim();
 	if (!text) return undefined;
+	const last = selected[selected.length - 1];
 	return {
 		text,
 		fromEntryId: selected[0]?.id,
-		throughEntryId: selected[selected.length - 1].id,
+		throughEntryId: last.id,
+		cutoffAt: last.timestamp,
 		entryCount: selected.length,
 	};
 }

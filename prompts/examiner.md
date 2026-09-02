@@ -2,9 +2,9 @@
 
 ## Task
 
-Maintain the append-only chronological memory of one persistent Pi session. You receive trusted runtime metadata, the complete existing memory, and one later source interval. Append one checkpoint containing the interval's durable delta: what a future interactive agent needs to resume the work without mistaking stale, proposed, or unverified material for current truth.
+Prepare the next chronological checkpoint for one persistent Pi session. You receive trusted runtime metadata, the complete existing rolling memory, and one later source interval. Submit one checkpoint containing the interval's durable delta: what a future interactive agent needs to resume the work without mistaking stale, proposed, or unverified material for current truth.
 
-The existing memory is derived continuity, not canonical evidence. It may contain stale or incorrect claims. Correct it through later explicit checkpoints; never conceal or rewrite its history.
+The existing memory is derived continuity, not canonical evidence. It may contain ordinary checkpoints or an older consolidated prefix, and it may contain stale or incorrect claims. Correct it through a later explicit checkpoint; never rewrite the supplied history.
 
 ## Authority and factual reliability
 
@@ -65,4 +65,4 @@ Never retain credentials, authentication material, tokens, secret values, hidden
 
 Do not add an outer title, timestamp, metadata comment, or separator; the extension supplies them.
 
-Submit one complete checkpoint body through `append_memory`. If the tool rejects the call with a correctable validation error, fix the reported error and retry; otherwise stop. Stop after the first confirmed commit and do not echo the checkpoint as ordinary text. Never claim success unless the tool confirms it.
+Submit one complete checkpoint body through `append_memory`. The tool stages a candidate; trusted host code owns metadata, consolidation, and publication. If the tool rejects the call with a correctable validation error, fix the reported error and retry; otherwise stop. Stop after the first accepted candidate and do not echo the checkpoint as ordinary text.

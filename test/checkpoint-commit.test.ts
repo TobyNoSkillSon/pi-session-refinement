@@ -1,63 +1,85 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { commitCheckpoint } from "../src/checkpoint-commit.ts";
-import type { SessionRefinementState } from "../src/types.ts";
+import { commitCandidatePublication } from "../src/checkpoint-commit.ts";
+import { appendRecordToMemory, getSessionPaths, readAuthoritativeMemory } from "../src/memory-file.ts";
+import { createCheckpointRecord } from "../src/rolling-memory.ts";
+import { createInitialState } from "../src/session-store.ts";
+import type { MemoryGenerationRef, SessionRefinementState } from "../src/types.ts";
 
-const paths = { root: "/tmp/session", memory: "/tmp/session/memory.md", pending: "/tmp/session/pending.md", state: "/tmp/session/state.json" };
-const record = { throughEntryId: "through", createdAt: "2026-01-01T00:00:00.000Z", trigger: "time" as const };
+const paths = { root: "/tmp/session", memory: "/tmp/session/memory.md", generations: "/tmp/session/generations", state: "/tmp/session/state.json" };
+const generation: MemoryGenerationRef = { file: "generations/memory-00000000-0000-4000-8000-000000000000.md", sha256: "a".repeat(64) };
 
 function state(): SessionRefinementState {
-	return { version: 1 as const, sessionId: "session", toolCallsSinceRun: 2, checkpoints: [], warnings: [] };
+	return { version: 2, sessionId: "session", toolCallsSinceRun: 2, records: [], warnings: [] };
 }
 
-test("checkpoint commit publishes matching memory and cursor state", async () => {
+function dependencies(events: string[], save: () => Promise<void> = async () => {}) {
+	return {
+		writeGeneration: async (_paths: typeof paths, content: string) => { events.push(`generation:${content}`); return generation; },
+		save: async () => { events.push("state"); await save(); },
+		remove: async (path: string) => { events.push(`remove:${path}`); },
+		cleanup: async () => { events.push("cleanup"); },
+	};
+}
+
+test("candidate publication writes immutable generation before the atomic state pointer", async () => {
 	const current = state();
 	const events: string[] = [];
-	await commitCheckpoint({
-		paths, state: current, body: "checkpoint", record, budgetTokens: 100,
-		applyState(value) { value.lastProcessedEntryId = record.throughEntryId; value.checkpoints.push(record); },
-		dependencies: {
-			readMemory: async () => "old",
-			append: async () => { events.push("append"); },
-			write: async () => { events.push("rollback"); },
-			save: async () => { events.push("save"); },
-		},
+	await commitCandidatePublication({
+		paths, state: current, memory: "new",
+		applyState(value) { value.lastProcessedEntryId = "through"; },
+		dependencies: dependencies(events),
 	});
-	assert.deepEqual(events, ["append", "save"]);
+	assert.deepEqual(events, ["generation:new", "state", "cleanup"]);
 	assert.equal(current.lastProcessedEntryId, "through");
+	assert.deepEqual(current.memoryGeneration, generation);
 });
 
-test("checkpoint commit restores memory and in-memory state after state failure", async () => {
+test("failed pointer publication leaves old in-memory state authoritative and deletes the orphan generation", async () => {
 	const current = state();
-	const writes: string[] = [];
-	await assert.rejects(commitCheckpoint({
-		paths, state: current, body: "checkpoint", record, budgetTokens: 100,
-		applyState(value) { value.lastProcessedEntryId = record.throughEntryId; value.checkpoints.push(record); },
-		dependencies: {
-			readMemory: async () => "old",
-			append: async () => {},
-			write: async (_path, content) => { writes.push(content); },
-			save: async () => { throw new Error("state failed"); },
-		},
+	const old = { file: "generations/memory-11111111-1111-4111-8111-111111111111.md", sha256: "b".repeat(64) };
+	current.memoryGeneration = old;
+	const events: string[] = [];
+	await assert.rejects(commitCandidatePublication({
+		paths, state: current, memory: "new",
+		applyState(value) { value.lastProcessedEntryId = "through"; },
+		dependencies: dependencies(events, async () => { throw new Error("state failed"); }),
 	}), /state failed/);
-	assert.deepEqual(writes, ["old"]);
+	assert.deepEqual(current.memoryGeneration, old);
 	assert.equal(current.lastProcessedEntryId, undefined);
-	assert.deepEqual(current.checkpoints, []);
-	assert.equal(current.toolCallsSinceRun, 2);
+	assert.deepEqual(events, ["generation:new", "state", `remove:${paths.root}/${generation.file}`]);
 });
 
-test("checkpoint append failure does not attempt rollback", async () => {
+test("successful publications retain only the active generation", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-generations-"));
+	try {
+		const live = getSessionPaths(root, "session");
+		const current = createInitialState("session");
+		for (let index = 0; index < 2; index++) {
+			const record = createCheckpointRecord({ throughEntryId: `entry-${index}`, createdAt: `2026-01-0${index + 1}T00:00:00Z`, trigger: "time" });
+			const memory = appendRecordToMemory("", `body-${index}`, record);
+			await commitCandidatePublication({ paths: live, state: current, memory, applyState(next) {
+				next.records = [record];
+				next.lastProcessedEntryId = record.throughEntryId;
+			} });
+		}
+		assert.equal((await readdir(live.generations)).filter((name) => name.startsWith("memory-")).length, 1);
+		assert.match(await readAuthoritativeMemory(live, current), /body-1/);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("generation write failure never attempts pointer publication or cleanup", async () => {
 	const current = state();
-	let writes = 0;
-	await assert.rejects(commitCheckpoint({
-		paths, state: current, body: "checkpoint", record, budgetTokens: 100,
-		applyState() {},
+	const events: string[] = [];
+	await assert.rejects(commitCandidatePublication({
+		paths, state: current, memory: "new", applyState() {},
 		dependencies: {
-			readMemory: async () => "old",
-			append: async () => { throw new Error("append failed"); },
-			write: async () => { writes++; },
-			save: async () => {},
+			...dependencies(events),
+			writeGeneration: async () => { events.push("generation"); throw new Error("write failed"); },
 		},
-	}), /append failed/);
-	assert.equal(writes, 0);
+	}), /write failed/);
+	assert.deepEqual(events, ["generation"]);
 });

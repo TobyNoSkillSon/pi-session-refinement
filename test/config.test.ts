@@ -8,12 +8,14 @@ test("uses portable defaults", () => {
 	assert.deepEqual(issues, []);
 	assert.equal(config.model, "current");
 	assert.equal(config.memoryBudgetTokens, 32_000);
+	assert.deepEqual(config.consolidator, { model: "current", thinking: "high" });
 });
 
 test("accepts configurable model, trigger, budget, and retry settings", () => {
 	const { config, issues } = parseConfig({
 		model: "provider/model",
 		thinking: "medium",
+		consolidator: { model: "provider/consolidator", thinking: "low" },
 		memoryBudgetTokens: 12_345,
 		triggers: { contextPercent: 85, elapsedMinutes: 60, minimumToolCalls: 10 },
 		maxAttempts: 5,
@@ -21,6 +23,7 @@ test("accepts configurable model, trigger, budget, and retry settings", () => {
 	assert.deepEqual(issues, []);
 	assert.equal(config.model, "provider/model");
 	assert.equal(config.triggers.contextPercent, 85);
+	assert.equal(config.consolidator.model, "provider/consolidator");
 	assert.equal(config.maxAttempts, 5);
 });
 

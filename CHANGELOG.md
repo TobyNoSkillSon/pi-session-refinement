@@ -1,16 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (unreleased)
 
-- Start timed refinement correctly on inherited forks, preserve retained tool activity across compaction, and process the first checkpoint when an empty-memory session resumes.
-- Detect checkpoint metadata, cursor, or body loss before resume; keep provider-context transformation fail-open and strengthen checks against private configuration or credentials entering the public project.
-- Prevent stale or disposed extension UI contexts from crashing Pi when asynchronous compaction or background refinement fails.
-- Show animated refinement and rebuild progress above the editor without occupying the footer.
-- Add cancellable, serialized reconstruction with prompt waiting and rollback when state publication fails.
-- Propagate compaction cancellation into examiner work and prevent stale operations from clearing newer progress.
-- Supply newly refined memory to immediate post-compaction continuations before the next fresh prompt.
+- Introduce incompatible v2 state and memory records. Existing v1 sessions remain injected read-only until an explicit rebuild; no automatic migration runs.
+- Stage checkpoint publication and roll memory at the 80% threshold by consolidating an oldest whole-record prefix selected by rendered token mass.
+- Add an isolated, configurable consolidator with immediate retries, current-model fallback, visible prompt policy, deterministic validation, and a 60% headroom target.
+- Preserve newer record bytes during a roll and track record kind, generation, source coverage, underlying record count, and cutoff chronology.
+- Pause automatic refinement after consolidation failure while keeping Pi and early context compaction available.
+- Make rebuild use the same staged rolling path and convert v1 only after every segment succeeds.
+- Replace automatic fork reconstruction with cheap v2 prefix inheritance, an immutable fork floor, and fork-local rebuilds.
+- Remove overflow side files and their warning policy.
+- Keep immediate post-compaction append updates while withholding prefix replacements until a fresh prompt.
+- Strengthen public checks against private paths, model configuration, credentials, and session material.
 
 ## 0.1.0
 
 - Initial implementation of chronological session-local refinement memory.
-- Configurable examiner model, background and compaction triggers, resume/fork support, reconstruction, budget warnings, and usage records.
+- Configurable examiner model, background and compaction triggers, resume and fork support, reconstruction, budget warnings, and usage records.

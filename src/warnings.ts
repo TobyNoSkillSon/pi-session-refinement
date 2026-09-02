@@ -1,13 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PersistentWarning } from "./types.js";
-
-const BUDGET_WARNING_PATH = fileURLToPath(new URL("../prompts/budget-warning.md", import.meta.url));
-
-export async function budgetRootInstruction(): Promise<string> {
-	return (await readFile(BUDGET_WARNING_PATH, "utf8")).trim();
-}
 
 export function notifyPersistentWarnings(ctx: ExtensionContext, warnings: PersistentWarning[], extra: string[] = []): void {
 	for (const issue of extra) ctx.ui.notify(`[Session Refinement] ${issue}`, "warning");

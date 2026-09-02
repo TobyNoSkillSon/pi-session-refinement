@@ -1,29 +1,33 @@
 # Session flow illustration
 
-The README embeds [`session-flow.svg`](session-flow.svg). The compact drawing repeats the central lifecycle twice:
+The README embeds [`session-flow.svg`](session-flow.svg). It shows two cycles:
 
-1. Chat and tool activity continue down the left track.
-2. Refinement appends checkpoint 2, then compaction 1 produces a Pi context containing the abbreviated system prompt, session memory through checkpoint 2, and the first compaction result.
-3. `memory.md` persists on the right while more chat accumulates.
-4. Refinement appends checkpoint 3, then compaction 2 produces a newer Pi context containing memory through checkpoint 3 and a new compaction result.
-5. Before each compaction, the file can be ahead of the memory snapshot in the current prompt.
-
-The checklist below keeps the drawing honest.
+1. Chat and tool activity make a checkpoint eligible.
+2. The examiner submits a checkpoint candidate. The host publishes it below the rolling threshold.
+3. Compaction activates the newer memory while raw JSONL remains canonical.
+4. More chat produces another candidate. If that candidate reaches 80% of the memory budget, the host consolidates an oldest legal whole-record range before publication.
+5. The second compaction activates the rolled memory. Immediate continuation receives only the exact new checkpoint as an additive update; the consolidation replacement waits for a fresh prompt.
 
 ## Behavior checklist
 
-- For normal background checkpointing, Pi checks after each settled agent run. Refinement starts only when both the elapsed-time threshold and the configured root `tool_result` count are met.
-- The refinement model receives the existing memory without checkpoint metadata, the next unprocessed conversation interval, and runtime metadata. Its only tool is `append_memory`.
-- Only one refinement runs at a time. You can keep using the conversation while it runs.
-- A successful checkpoint appends to `memory.md` and updates the cursor in `state.json`. It does not change the memory snapshot already in the current prompt.
-- The latest memory becomes available after compaction, on resume or fork, and after a successful rebuild. A fresh prompt receives the complete snapshot; an immediate post-compaction continuation receives a temporary update.
-- If Pi continues the same run after compaction, a temporary context message supplies the appended checkpoint on every model call. The next fresh prompt carries the complete snapshot and no temporary update.
-- When context reaches its configured threshold, the extension requests compaction. By default, manual `/compact` runs the pre-compaction check; configuration can disable it.
-- Before compaction, the extension waits for active refinement, then attempts to refine entries that compaction would otherwise remove from active context. This save is best-effort: Pi can continue compacting after a failure or cancellation. Pi then writes its compaction summary and keeps the recent entries.
-- On resume, a valid baseline cursor can create the first checkpoint for a session whose memory is still empty. Recorded checkpoints without their matching memory file are treated as broken state. Older sessions with no refinement files receive a rebuild warning instead of automatic reconstruction.
-- A fork inherits a checkpoint only when its last entry ID (`throughEntryId`) belongs to the selected branch. If the fork has history but inherits no checkpoints, the extension rebuilds that branch before using its memory.
-- For an explicit rebuild, the extension asks for confirmation, then processes the current branch in temporary segments split at recorded compactions. It activates the rebuilt memory only after every segment succeeds. In Pi, pressing Escape cancels before publishing starts. The extension writes `memory.md` before `state.json`; if the state write fails, it attempts to restore the previous memory file.
-- If a checkpoint exceeds the memory budget, the extension writes it to `pending.md`, leaves active memory unchanged, and shows a persistent warning.
-- The extension never rewrites existing entries in Pi's raw session JSONL. It may append custom usage records; the JSONL remains the canonical session record.
-- Refinement memory is not created for disabled configurations, sessions without a persistent file, spawned children, or `--no-session` runs.
-
+- Pi checks normal background eligibility after each settled root run. Both elapsed time and root `tool_result` count must pass.
+- The examiner receives rendered memory, one new chronological interval, and runtime metadata. Its only tool submits one checkpoint candidate.
+- Refinement and consolidation use isolated sessions. Neither adds tools to the interactive conversation.
+- Candidate publication is transactional. Before a successful write, active memory and `lastProcessedEntryId` remain unchanged.
+- At exactly 80% of `memoryBudgetTokens`, the host selects the oldest legal contiguous whole-record range whose rendered token mass is closest to half the configured budget.
+- The consolidator receives only that prefix. It creates continuity at the prefix cutoff and silently checks consistency and deletion before submission.
+- Host checks reject empty, malformed, non-compressing, over-budget, and insufficient-headroom output. Valid output should leave memory at roughly 60% of budget or less.
+- Consolidation metadata records kind, generation, source coverage, underlying source-record count, creation time, and cutoff chronology. Later rolls can include earlier consolidation records.
+- Newer retained records remain byte-exact.
+- Only one memory operation runs at a time. Background work does not block ordinary conversation.
+- A published background checkpoint stays outside the active prompt snapshot until compaction or resume.
+- Immediate post-compaction continuation receives the exact new checkpoint as a non-persistent additive update on every provider call. A consolidation body never uses that bridge as a lower-priority replacement.
+- A fresh prompt receives the complete active memory once and resets the bridge.
+- Pre-compaction refinement waits for active work and attempts to preserve material that would leave context. Pi may still compact after a failure or cancellation.
+- Consolidation failure pauses automatic refinement and asks for `/session-refinement-rebuild`; early context compaction remains available.
+- Valid v1 memory stays injected read-only. Historical sessions without memory also require the manual command. The extension scans no siblings and runs no mass migration.
+- Root rebuild starts at branch beginning. Rebuild stages every segment, applies the same rolling rule, and publishes only after all segments succeed.
+- A v2 fork inherits only the active record prefix valid at its selected point. It records that point as an immutable floor and starts child processing after it. A later rebuild preserves inherited records and reconstructs only the fork-local tail.
+- Forks never replay parent JSONL automatically. A historical fork before the rolling base may inherit nothing.
+- Raw Pi JSONL remains canonical. The extension may append model-usage custom entries, which stay outside model context.
+- Runtime memory exists only for enabled persistent root sessions.

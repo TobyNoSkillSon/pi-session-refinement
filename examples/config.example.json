@@ -2,6 +2,10 @@
   "enabled": true,
   "model": "current",
   "thinking": "high",
+  "consolidator": {
+    "model": "current",
+    "thinking": "high"
+  },
   "memoryBudgetTokens": 32000,
   "triggers": {
     "contextPercent": 80,

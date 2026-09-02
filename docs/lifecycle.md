@@ -2,28 +2,48 @@
 
 ## New sessions
 
-A new persistent session starts with no memory. Trigger counters begin at startup.
+A new persistent session starts with v2 state and no memory records. Trigger counters begin at startup.
 
-## Resume
+## Resume and compatibility
 
-Existing memory is loaded before the first model response. If state has a valid cursor and the branch contains a new tail, the examiner processes that tail synchronously before injection; this can create the first checkpoint after a short session resumes. State that records checkpoints without its matching memory file is treated as broken. Historical sessions with no refinement files receive a persistent rebuild warning rather than incurring unrequested reconstruction cost.
+A valid v2 memory loads before the first response. If its cursor has a new branch tail, the examiner processes that tail before injection. This can create the first checkpoint after a short session resumes.
+
+A valid v1 session follows a stricter path: its memory is still injected, but it stays read-only. Automatic refinement pauses and every turn asks for `/session-refinement-rebuild`. Historical sessions with no refinement memory receive the same warning without the extension creating replacement state. There is no automatic or multi-session migration.
+
+Unreadable state, missing record bodies, and cursor mismatches also pause automatic work and require the command.
 
 ## Timed checkpoints
 
-After the configured elapsed time and minimum root tool results, the examiner processes entries after the persistent cursor. Work is background and single-flight. The completed block is stored immediately but activated only after compaction or resume.
+After the configured elapsed time and root tool-result count, the examiner processes entries after `lastProcessedEntryId`. Work is single-flight and runs in the background. A completed candidate is published immediately unless it first requires consolidation. The current prompt continues using its existing snapshot.
+
+## Rolling consolidation
+
+The host checks each staged candidate against 80% of `memoryBudgetTokens`. At the threshold, it selects an oldest legal whole-record range by rendered token mass, aiming closest to 50% of the budget. Existing consolidation records count as ordinary oldest records during later rolls.
+
+A separate isolated model turns that prefix into current continuity at the cutoff. Host metadata records its kind, generation, covered source cursor, underlying source-record count, creation time, and cutoff time. The retained suffix stays byte-exact. Empty, malformed, non-compressing, over-budget, and insufficient-headroom replacements are rejected.
+
+The host publishes only after refinement and any required consolidation succeed. A crash or failure leaves active memory and its cursor unchanged.
 
 ## Context and manual compaction
 
-At the configured context percentage, the extension requests compaction. `session_before_compact` is awaited by Pi, so refinement completes, exhausts retries, or skips before normal Pi compaction proceeds. Manual `/compact` follows the same ordering. If Pi immediately continues the same agent run, a temporary context message supplies the newly appended checkpoint on every model call; the next fresh prompt carries the full snapshot in its system prompt.
+At the configured context percentage, the extension requests compaction. `session_before_compact` is awaited by Pi, so refinement completes, exhausts retries, or skips before Pi compacts. Manual `/compact` follows the same ordering unless disabled in configuration.
 
-## Progress and interaction
+If Pi continues the same run, a temporary context message supplies the exact new checkpoint, including when publication also consolidated older records. The next fresh prompt carries the full memory. The consolidation body itself never uses the additive bridge as a lower-priority replacement.
 
-Model-backed refinement displays a non-modal animated indicator above the editor. Background checkpoints do not block conversation. Resume processing finishes before the first response, while Pi queues submissions during compaction. Reconstruction behaves as a foreground maintenance operation: the editor remains usable, submitted prompts wait, and Escape cancels before the replacement commit begins.
+A `consolidation-failed` warning pauses further automatic memory writes but does not suppress early context compaction.
 
-## Budget
+## Rebuild
 
-When a complete proposed checkpoint would exceed the configured budget, active memory is unchanged and the proposed block is written to `pending.md`. A persistent warning instructs the root agent to consult the user before editing, compressing, merging, or deleting memory.
+`/session-refinement-rebuild` asks for confirmation, then processes chronological segments in a temporary transaction. Root sessions start at the branch beginning. A v2 fork begins with its inherited baseline and reconstructs only entries after its immutable floor. Each segment uses the normal rolling check. Active files change only after every segment succeeds.
 
-## Broken state
+The editor remains usable while the non-modal loader reports progress. Submitted prompts wait. Escape cancels before replacement publication.
 
-Unreadable or inconsistent mechanical state disables examination but not Pi. The condition warns on every user turn until the user requests `/session-refinement-rebuild` or repairs the files through the root agent.
+## Forks
+
+At creation, a child copies only the active v2 record prefix valid on the selected branch. Its processing cursor starts at the fork floor, even when inherited memory covers less. The extension never reconstructs the parent's raw history for the child. Old fork points can therefore inherit little or no memory.
+
+A v1 child remains read-only until manual rebuild.
+
+## Failure
+
+Examiner failure leaves the raw interval available to retry. Consolidator failure persists a session warning and asks for rebuild. Pi and its normal compaction lifecycle remain available. Runtime storage contains no permanent old-memory archive; publication keeps an old value only long enough to roll back a failed state write.

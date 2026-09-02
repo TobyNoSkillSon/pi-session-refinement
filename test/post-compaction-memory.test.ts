@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,25 +10,15 @@ import { Type } from "typebox";
 import { RefinementController } from "../src/lifecycle.ts";
 import sessionRefinement from "../src/index.ts";
 import { buildMemoryOverlay, MEMORY_UPDATE_CUSTOM_TYPE } from "../src/memory-overlay.ts";
-import { getSessionPaths, MEMORY_HEADER } from "../src/memory-file.ts";
+import { appendRecordToMemory, formatMemoryRecord, getSessionPaths, parseMemoryRecords, renderMemoryForPrompt, writeMemoryGeneration } from "../src/memory-file.ts";
+import { createCheckpointRecord } from "../src/rolling-memory.ts";
 
-const BASE = `${MEMORY_HEADER}
-## Base checkpoint
-
-BASE_MEMORY
-`;
-const APPENDED = `${BASE.trimEnd()}
-
-<!-- pi-session-refinement:{"throughEntryId":"next","createdAt":"2026-01-01T00:00:00Z","trigger":"context"} -->
-## New checkpoint
-
-NEW_CHECKPOINT
-`;
-const REPLACEMENT = `${MEMORY_HEADER}
-## Rebuilt memory
-
-REPLACEMENT_MEMORY
-`;
+const BASE_RECORD = createCheckpointRecord({ throughEntryId: "base", createdAt: "2026-01-01T00:00:00Z", trigger: "time" });
+const NEW_RECORD = createCheckpointRecord({ fromEntryId: "next", throughEntryId: "next", createdAt: "2026-01-01T01:00:00Z", trigger: "context" });
+const REPLACEMENT_RECORD = createCheckpointRecord({ throughEntryId: "replacement", createdAt: "2026-01-01T02:00:00Z", trigger: "rebuild" });
+const BASE = appendRecordToMemory("", "BASE_MEMORY", BASE_RECORD);
+const APPENDED = appendRecordToMemory(BASE, "NEW_CHECKPOINT", NEW_RECORD);
+const REPLACEMENT = appendRecordToMemory("", "REPLACEMENT_MEMORY", REPLACEMENT_RECORD);
 
 const ctx = {
 	mode: "tui",
@@ -39,19 +29,29 @@ const ctx = {
 async function syntheticController(memory = BASE) {
 	const agentDir = await mkdtemp(join(tmpdir(), "pi-session-refinement-postcompact-"));
 	const paths = getSessionPaths(agentDir, "session");
-	await mkdir(paths.root, { recursive: true });
-	await writeFile(paths.memory, memory);
 	const controller: any = new RefinementController({} as any);
 	controller.active = true;
 	controller.firstPrompt = false;
 	controller.injectedMemory = memory;
-	controller.state = { version: 1, sessionId: "session", toolCallsSinceRun: 0, checkpoints: [], warnings: [] };
+	controller.state = { version: 2, sessionId: "session", toolCallsSinceRun: 0, records: [], warnings: [] };
+	if (memory) {
+		controller.state.records = parseMemoryRecords(memory).map((entry) => entry.record);
+		controller.state.lastProcessedEntryId = controller.state.records.at(-1).throughEntryId;
+		controller.state.memoryGeneration = await writeMemoryGeneration(paths, memory);
+	}
 	controller.paths = paths;
 	controller.loadedConfig = {
-		config: { enabled: true, model: "current", thinking: "high", memoryBudgetTokens: 32_000, triggers: { contextPercent: 80, elapsedMinutes: 40, minimumToolCalls: 25 }, runOnManualCompaction: true, maxAttempts: 3 },
+		config: { enabled: true, model: "current", thinking: "high", consolidator: { model: "current", thinking: "high" }, memoryBudgetTokens: 32_000, triggers: { contextPercent: 80, elapsedMinutes: 40, minimumToolCalls: 25 }, runOnManualCompaction: true, maxAttempts: 3 },
 		issues: [],
 	};
 	return { controller, paths, agentDir };
+}
+
+async function publish(controller: any, paths: ReturnType<typeof getSessionPaths>, memory: string): Promise<void> {
+	const records = parseMemoryRecords(memory).map((entry) => entry.record);
+	controller.state.records = records;
+	controller.state.lastProcessedEntryId = records.at(-1)?.throughEntryId;
+	controller.state.memoryGeneration = memory ? await writeMemoryGeneration(paths, memory) : undefined;
 }
 
 function userMessage(text = "continue") {
@@ -88,7 +88,7 @@ test("post-compaction continuation receives newly refined memory on every provid
 	try {
 		const originalPrompt = await controller.beforeAgentStart(ctx, "SYSTEM");
 		assert.match(originalPrompt, /BASE_MEMORY/);
-		await writeFile(paths.memory, APPENDED);
+		await publish(controller, paths, APPENDED);
 		await controller.afterCompact();
 
 		const source = [userMessage()];
@@ -116,7 +116,7 @@ test("fresh prompt after compaction carries full memory and clears the temporary
 	const { controller, paths, agentDir } = await syntheticController();
 	try {
 		await controller.beforeAgentStart(ctx, "SYSTEM");
-		await writeFile(paths.memory, APPENDED);
+		await publish(controller, paths, APPENDED);
 		await controller.afterCompact();
 		assert.ok(controller.contextMessages([userMessage()]));
 
@@ -134,7 +134,7 @@ test("background disk checkpoint stays inactive until an activation boundary", a
 	const { controller, paths, agentDir } = await syntheticController();
 	try {
 		await controller.beforeAgentStart(ctx, "SYSTEM");
-		await writeFile(paths.memory, APPENDED);
+		await publish(controller, paths, APPENDED);
 		assert.equal(controller.contextMessages([userMessage()]), undefined);
 		const beforeActivation = await controller.beforeAgentStart(ctx, "SYSTEM");
 		assert.doesNotMatch(beforeActivation, /NEW_CHECKPOINT/);
@@ -161,7 +161,7 @@ test("non-append replacement waits for a fresh prompt and then becomes canonical
 	const { controller, paths, agentDir } = await syntheticController();
 	try {
 		await controller.beforeAgentStart(ctx, "SYSTEM");
-		await writeFile(paths.memory, REPLACEMENT);
+		await publish(controller, paths, REPLACEMENT);
 		await controller.afterCompact();
 		assert.equal(controller.contextMessages([userMessage()]), undefined);
 
@@ -174,6 +174,24 @@ test("non-append replacement waits for a fresh prompt and then becomes canonical
 	}
 });
 
+
+test("a consolidation replacement activates only the exact additive checkpoint during immediate continuation", async () => {
+	const { controller, paths, agentDir } = await syntheticController();
+	try {
+		await controller.beforeAgentStart(ctx, "SYSTEM");
+		controller.deferredCheckpointUpdates = [renderMemoryForPrompt(formatMemoryRecord("NEW_CHECKPOINT", NEW_RECORD))];
+		await publish(controller, paths, REPLACEMENT);
+		await controller.afterCompact();
+		for (const result of [controller.contextMessages([userMessage()]), controller.contextMessages([userMessage()])]) {
+			const sent = JSON.stringify(result?.messages);
+			assert.match(sent, /NEW_CHECKPOINT/);
+			assert.doesNotMatch(sent, /REPLACEMENT_MEMORY/);
+		}
+		const fresh = await controller.beforeAgentStart(ctx, "SYSTEM");
+		assert.match(fresh, /REPLACEMENT_MEMORY/);
+		assert.equal(controller.contextMessages([userMessage()]), undefined);
+	} finally { await rm(agentDir, { recursive: true, force: true }); }
+});
 
 test("extension registers the post-compaction provider-context bridge", () => {
 	const handlers = new Map<string, Function>();
@@ -247,7 +265,7 @@ test("synthetic provider sees the first checkpoint when compaction creates sessi
 	try {
 		const staleSystemPrompt = await controller.beforeAgentStart(ctx, "SYSTEM");
 		assert.doesNotMatch(staleSystemPrompt, /session_memory/);
-		await writeFile(paths.memory, BASE);
+		await publish(controller, paths, BASE);
 		await controller.afterCompact();
 
 		const captures: Array<{ systemPrompt?: string; messages: Context["messages"] }> = [];
@@ -286,7 +304,7 @@ test("synthetic provider sees compaction delta throughout continuation, then ful
 	const { controller, paths, agentDir } = await syntheticController();
 	try {
 		const staleSystemPrompt = await controller.beforeAgentStart(ctx, "SYSTEM");
-		await writeFile(paths.memory, APPENDED);
+		await publish(controller, paths, APPENDED);
 		await controller.afterCompact();
 
 		const captures: Array<{ systemPrompt?: string; messages: Context["messages"] }> = [];

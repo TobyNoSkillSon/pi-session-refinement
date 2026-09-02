@@ -3,7 +3,7 @@ import type { RefinementController } from "./lifecycle.js";
 
 export function registerCommands(pi: ExtensionAPI, controller: RefinementController): void {
 	pi.registerCommand("session-refinement-rebuild", {
-		description: "Reconstruct chronological session refinement memory from the current session branch",
+		description: "Rebuild v2 rolling session memory from the authorized branch history",
 		handler: async (_args, ctx) => {
 			await controller.rebuild(ctx);
 		},

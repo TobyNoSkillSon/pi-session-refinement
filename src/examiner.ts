@@ -8,12 +8,17 @@ import {
 	defineTool,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { BudgetExceededError } from "./memory-file.js";
-import { buildExaminerTask, loadExaminerPrompt } from "./prompt.js";
+import {
+	buildConsolidatorTask,
+	buildExaminerTask,
+	loadConsolidatorPrompt,
+	loadExaminerPrompt,
+} from "./prompt.js";
 import type {
+	ConsolidationRequest,
 	ExaminationRequest,
-	ExaminationResult,
-	RefinementConfig,
+	ModelOperationConfig,
+	ModelOperationResult,
 } from "./types.js";
 
 export type ExaminerProgressEvent =
@@ -21,7 +26,7 @@ export type ExaminerProgressEvent =
 	| { type: "fallback"; model: string };
 
 export interface ExaminerCallbacks {
-	appendMemory(body: string, modelReference: string): Promise<void>;
+	acceptBody(body: string, modelReference: string): Promise<void>;
 	warning(message: string): void;
 	missingConfiguredModel(reference: string): Promise<void>;
 	configuredModelAvailable(): Promise<void>;
@@ -57,16 +62,8 @@ function combineUsage(messages: Message[]): Usage | undefined {
 			cacheWrite: total.cost.cacheWrite + (usage.cost?.cacheWrite ?? 0),
 			total: total.cost.total + (usage.cost?.total ?? 0),
 		},
-	}), {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	});
+	}), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
 }
-
 
 function addUsage(total: Usage | undefined, usage: Usage | undefined): Usage | undefined {
 	if (!usage) return total;
@@ -87,15 +84,24 @@ function addUsage(total: Usage | undefined, usage: Usage | undefined): Usage | u
 	};
 }
 
+interface IsolatedOperation {
+	label: string;
+	toolName: "append_memory" | "replace_memory_prefix";
+	toolLabel: string;
+	toolDescription: string;
+	systemPrompt: string;
+	task: string;
+}
+
 async function runOneAttempt(options: {
 	cwd: string;
 	agentDir: string;
 	model: Model<any>;
-	config: RefinementConfig;
-	request: ExaminationRequest;
-	appendMemory(body: string, modelReference: string): Promise<void>;
+	operationConfig: ModelOperationConfig;
+	operation: IsolatedOperation;
+	acceptBody(body: string, modelReference: string): Promise<void>;
 	signal?: AbortSignal;
-}): Promise<{ appended: boolean; usage?: Usage; error?: string; budgetExceeded?: boolean }> {
+}): Promise<{ body?: string; usage?: Usage; error?: string }> {
 	const settingsManager = SettingsManager.create(options.cwd, options.agentDir);
 	const resourceLoader = new DefaultResourceLoader({
 		cwd: options.cwd,
@@ -106,30 +112,26 @@ async function runOneAttempt(options: {
 		noPromptTemplates: true,
 		noThemes: true,
 		noContextFiles: true,
-		systemPrompt: await loadExaminerPrompt(),
+		systemPrompt: options.operation.systemPrompt,
 	});
 	await resourceLoader.reload();
 
-	let appended = false;
-	let appendError: string | undefined;
-	let budgetExceeded = false;
-	const appendTool = defineTool({
-		name: "append_memory",
-		label: "Append Session Memory",
-		description: "Append one complete chronological checkpoint to this session's memory file.",
-		parameters: Type.Object({
-			body: Type.String({ description: "Complete checkpoint body without the timestamp or outer separator." }),
-		}),
+	let acceptedBody: string | undefined;
+	let submissionError: string | undefined;
+	const submissionTool = defineTool({
+		name: options.operation.toolName,
+		label: options.operation.toolLabel,
+		description: options.operation.toolDescription,
+		parameters: Type.Object({ body: Type.String({ description: "Complete memory record body without host metadata or an outer title." }) }),
 		async execute(_toolCallId, params) {
-			if (appended) throw new Error("A checkpoint was already appended during this examination.");
-			if (options.signal?.aborted) throw new Error("Examination cancelled before checkpoint commit.");
+			if (acceptedBody) throw new Error("A memory candidate was already accepted during this operation.");
+			if (options.signal?.aborted) throw new Error(`${options.operation.label} cancelled before candidate submission.`);
 			try {
-				await options.appendMemory(params.body, canonicalModel(options.model));
-				appended = true;
-				return { content: [{ type: "text", text: "Checkpoint appended successfully." }], details: {} };
+				await options.acceptBody(params.body, canonicalModel(options.model));
+				acceptedBody = params.body;
+				return { content: [{ type: "text", text: "Memory candidate accepted." }], details: {} };
 			} catch (error) {
-				appendError = error instanceof Error ? error.message : String(error);
-				budgetExceeded = error instanceof BudgetExceededError;
+				submissionError = error instanceof Error ? error.message : String(error);
 				throw error;
 			}
 		},
@@ -139,9 +141,9 @@ async function runOneAttempt(options: {
 		cwd: options.cwd,
 		agentDir: options.agentDir,
 		model: options.model,
-		thinkingLevel: options.config.thinking,
-		tools: ["append_memory"],
-		customTools: [appendTool],
+		thinkingLevel: options.operationConfig.thinking,
+		tools: [options.operation.toolName],
+		customTools: [submissionTool],
 		resourceLoader,
 		settingsManager,
 		sessionManager: SessionManager.inMemory(options.cwd),
@@ -155,13 +157,13 @@ async function runOneAttempt(options: {
 	const abort = () => { void session.abort(); };
 	options.signal?.addEventListener("abort", abort, { once: true });
 	try {
-		if (options.signal?.aborted) return { appended: false, usage: combineUsage(messages), error: "Examination cancelled." };
-		await session.prompt(buildExaminerTask(options.request));
-		if (!appended) return { appended: false, usage: combineUsage(messages), error: appendError ?? "Examiner finished without calling append_memory.", budgetExceeded };
-		return { appended: true, usage: combineUsage(messages) };
+		if (options.signal?.aborted) return { usage: combineUsage(messages), error: `${options.operation.label} cancelled.` };
+		await session.prompt(options.operation.task);
+		if (!acceptedBody) return { usage: combineUsage(messages), error: submissionError ?? `Model finished without calling ${options.operation.toolName}.` };
+		return { body: acceptedBody, usage: combineUsage(messages) };
 	} catch (error) {
-		if (appended) return { appended: true, usage: combineUsage(messages) };
-		return { appended: false, usage: combineUsage(messages), error: appendError ?? (error instanceof Error ? error.message : String(error)), budgetExceeded };
+		if (acceptedBody) return { body: acceptedBody, usage: combineUsage(messages) };
+		return { usage: combineUsage(messages), error: submissionError ?? (error instanceof Error ? error.message : String(error)) };
 	} finally {
 		options.signal?.removeEventListener("abort", abort);
 		unsubscribe();
@@ -169,73 +171,121 @@ async function runOneAttempt(options: {
 	}
 }
 
-export async function runExaminer(options: {
+async function runIsolatedOperation(options: {
 	cwd: string;
 	agentDir: string;
 	registry: ModelRegistry;
 	currentModel: Model<any>;
-	config: RefinementConfig;
-	request: ExaminationRequest;
+	operationConfig: ModelOperationConfig;
+	maxAttempts: number;
+	operation: IsolatedOperation;
 	callbacks: ExaminerCallbacks;
 	signal?: AbortSignal;
-}): Promise<ExaminationResult> {
-	const configured = options.config.model === "current" || options.config.model === canonicalModel(options.currentModel)
+}): Promise<ModelOperationResult> {
+	const configured = options.operationConfig.model === "current" || options.operationConfig.model === canonicalModel(options.currentModel)
 		? options.currentModel
-		: resolveConfiguredModel(options.config.model, options.registry);
-	if (!configured) {
-		await options.callbacks.missingConfiguredModel(options.config.model);
-	} else {
-		await options.callbacks.configuredModelAvailable();
-	}
+		: resolveConfiguredModel(options.operationConfig.model, options.registry);
+	if (!configured) await options.callbacks.missingConfiguredModel(options.operationConfig.model);
+	else await options.callbacks.configuredModelAvailable();
 	const candidates: Array<{ model: Model<any>; fallback: boolean }> = [];
 	if (configured) candidates.push({ model: configured, fallback: false });
-	if (!configured || canonicalModel(configured) !== canonicalModel(options.currentModel)) {
-		candidates.push({ model: options.currentModel, fallback: true });
-	}
+	if (!configured || canonicalModel(configured) !== canonicalModel(options.currentModel)) candidates.push({ model: options.currentModel, fallback: true });
 
 	let attempts = 0;
 	let lastError: string | undefined;
+	let lastAttemptedModel: string | undefined;
+	let fallbackAttempted = false;
 	let aggregateUsage: Usage | undefined;
 	for (const candidate of candidates) {
 		if (options.signal?.aborted) break;
 		const modelReference = canonicalModel(candidate.model);
 		if (candidate.fallback) {
 			options.callbacks.progress?.({ type: "fallback", model: modelReference });
-			options.callbacks.warning(`Session refinement is falling back to ${modelReference}.`);
+			options.callbacks.warning(`${options.operation.label} is falling back to ${modelReference}.`);
 		}
-		for (let attempt = 1; attempt <= options.config.maxAttempts; attempt++) {
+		for (let attempt = 1; attempt <= options.maxAttempts; attempt++) {
 			if (options.signal?.aborted) break;
 			attempts++;
-			options.callbacks.progress?.({ type: "attempt", model: modelReference, attempt, maximum: options.config.maxAttempts, fallback: candidate.fallback });
-			const result = await runOneAttempt({
-				cwd: options.cwd,
-				agentDir: options.agentDir,
-				model: candidate.model,
-				config: options.config,
-				request: options.request,
-				appendMemory: options.callbacks.appendMemory,
-				signal: options.signal,
-			});
+			lastAttemptedModel = modelReference;
+			if (candidate.fallback) fallbackAttempted = true;
+			options.callbacks.progress?.({ type: "attempt", model: modelReference, attempt, maximum: options.maxAttempts, fallback: candidate.fallback });
+			let result: { body?: string; usage?: Usage; error?: string };
+			try {
+				result = await runOneAttempt({
+					cwd: options.cwd,
+					agentDir: options.agentDir,
+					model: candidate.model,
+					operationConfig: options.operationConfig,
+					operation: options.operation,
+					acceptBody: options.callbacks.acceptBody,
+					signal: options.signal,
+				});
+			} catch (error) {
+				result = { error: error instanceof Error ? error.message : String(error) };
+			}
 			aggregateUsage = addUsage(aggregateUsage, result.usage);
-			if (result.budgetExceeded) {
-				return { ok: false, appended: false, budgetExceeded: true, usedModel: canonicalModel(candidate.model), attempts, fallbackUsed: candidate.fallback, usage: aggregateUsage, error: result.error };
-			}
-			if (result.appended) {
-				return { ok: true, appended: true, usedModel: canonicalModel(candidate.model), attempts, fallbackUsed: candidate.fallback, usage: aggregateUsage };
-			}
+			if (result.body !== undefined) return { ok: true, body: result.body, usedModel: modelReference, attempts, fallbackUsed: fallbackAttempted, usage: aggregateUsage };
 			lastError = result.error;
-			if (options.signal?.aborted) break;
 		}
-		if (options.signal?.aborted) break;
-		options.callbacks.warning(`Session refinement failed with ${canonicalModel(candidate.model)} after ${options.config.maxAttempts} attempts: ${lastError ?? "unknown error"}`);
+		if (!options.signal?.aborted) options.callbacks.warning(`${options.operation.label} failed with ${modelReference} after ${options.maxAttempts} attempts: ${lastError ?? "unknown error"}`);
 	}
 	return {
 		ok: false,
-		appended: false,
 		cancelled: options.signal?.aborted || undefined,
+		usedModel: lastAttemptedModel,
 		attempts,
-		fallbackUsed: candidates.some((entry) => entry.fallback),
+		fallbackUsed: fallbackAttempted,
 		usage: aggregateUsage,
-		error: options.signal?.aborted ? "Examination cancelled." : lastError ?? "No usable examiner model.",
+		error: options.signal?.aborted ? `${options.operation.label} cancelled.` : lastError ?? `No usable ${options.operation.label.toLowerCase()} model.`,
 	};
+}
+
+export async function runExaminer(options: {
+	cwd: string;
+	agentDir: string;
+	registry: ModelRegistry;
+	currentModel: Model<any>;
+	config: ModelOperationConfig & { maxAttempts: number };
+	request: ExaminationRequest;
+	callbacks: ExaminerCallbacks;
+	signal?: AbortSignal;
+}): Promise<ModelOperationResult> {
+	return runIsolatedOperation({
+		...options,
+		operationConfig: options.config,
+		maxAttempts: options.config.maxAttempts,
+		operation: {
+			label: "Session refinement",
+			toolName: "append_memory",
+			toolLabel: "Submit Session Memory",
+			toolDescription: "Submit one complete chronological checkpoint candidate for host validation and staged publication.",
+			systemPrompt: await loadExaminerPrompt(),
+			task: buildExaminerTask(options.request),
+		},
+	});
+}
+
+export async function runConsolidator(options: {
+	cwd: string;
+	agentDir: string;
+	registry: ModelRegistry;
+	currentModel: Model<any>;
+	config: ModelOperationConfig & { maxAttempts: number };
+	request: ConsolidationRequest;
+	callbacks: ExaminerCallbacks;
+	signal?: AbortSignal;
+}): Promise<ModelOperationResult> {
+	return runIsolatedOperation({
+		...options,
+		operationConfig: options.config,
+		maxAttempts: options.config.maxAttempts,
+		operation: {
+			label: "Memory consolidation",
+			toolName: "replace_memory_prefix",
+			toolLabel: "Replace Memory Prefix",
+			toolDescription: "Submit one consolidated prefix replacement for deterministic host validation.",
+			systemPrompt: await loadConsolidatorPrompt(),
+			task: buildConsolidatorTask(options.request),
+		},
+	});
 }

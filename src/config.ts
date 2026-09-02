@@ -6,6 +6,10 @@ export const DEFAULT_CONFIG: RefinementConfig = {
 	enabled: true,
 	model: "current",
 	thinking: "high",
+	consolidator: {
+		model: "current",
+		thinking: "high",
+	},
 	memoryBudgetTokens: 32_000,
 	triggers: {
 		contextPercent: 80,
@@ -50,6 +54,10 @@ export function parseConfig(input: unknown): { config: RefinementConfig; issues:
 		? raw.triggers as Record<string, unknown>
 		: {};
 	if (raw.triggers !== undefined && triggerRaw !== raw.triggers) issues.push("triggers must be an object; using defaults.");
+	const consolidatorRaw = raw.consolidator && typeof raw.consolidator === "object" && !Array.isArray(raw.consolidator)
+		? raw.consolidator as Record<string, unknown>
+		: {};
+	if (raw.consolidator !== undefined && consolidatorRaw !== raw.consolidator) issues.push("consolidator must be an object; using defaults.");
 
 	const model = typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : DEFAULT_CONFIG.model;
 	if (raw.model !== undefined && model === DEFAULT_CONFIG.model && raw.model !== DEFAULT_CONFIG.model) {
@@ -59,12 +67,26 @@ export function parseConfig(input: unknown): { config: RefinementConfig; issues:
 		? raw.thinking as RefinementThinkingLevel
 		: DEFAULT_CONFIG.thinking;
 	if (raw.thinking !== undefined && thinking !== raw.thinking) issues.push(`thinking is invalid; using "${thinking}".`);
+	const consolidatorModel = typeof consolidatorRaw.model === "string" && consolidatorRaw.model.trim()
+		? consolidatorRaw.model.trim()
+		: DEFAULT_CONFIG.consolidator.model;
+	if (consolidatorRaw.model !== undefined && consolidatorModel === DEFAULT_CONFIG.consolidator.model
+		&& consolidatorRaw.model !== DEFAULT_CONFIG.consolidator.model) {
+		issues.push(`consolidator.model must be a non-empty string; using "${DEFAULT_CONFIG.consolidator.model}".`);
+	}
+	const consolidatorThinking = THINKING_LEVELS.has(consolidatorRaw.thinking as RefinementThinkingLevel)
+		? consolidatorRaw.thinking as RefinementThinkingLevel
+		: DEFAULT_CONFIG.consolidator.thinking;
+	if (consolidatorRaw.thinking !== undefined && consolidatorThinking !== consolidatorRaw.thinking) {
+		issues.push(`consolidator.thinking is invalid; using "${consolidatorThinking}".`);
+	}
 
 	return {
 		config: {
 			enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CONFIG.enabled,
 			model,
 			thinking,
+			consolidator: { model: consolidatorModel, thinking: consolidatorThinking },
 			memoryBudgetTokens: positiveInteger(raw.memoryBudgetTokens, DEFAULT_CONFIG.memoryBudgetTokens, "memoryBudgetTokens", issues),
 			triggers: {
 				contextPercent: percent(triggerRaw.contextPercent, DEFAULT_CONFIG.triggers.contextPercent, issues),

@@ -1,52 +1,47 @@
-import type { CheckpointRecord, SessionPaths, SessionRefinementState } from "./types.js";
-import { appendCheckpoint, atomicWrite, readMemory } from "./memory-file.js";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import type { MemoryGenerationRef, SessionPaths, SessionRefinementState } from "./types.js";
+import { cleanupMemoryGenerations, writeMemoryGeneration } from "./memory-file.js";
 import { saveState } from "./session-store.js";
 
-interface CheckpointCommitDependencies {
-	readMemory(path: string): Promise<string>;
-	append(options: { paths: SessionPaths; body: string; record: CheckpointRecord; budgetTokens: number }): Promise<unknown>;
-	write(path: string, content: string): Promise<void>;
+interface CandidateCommitDependencies {
+	writeGeneration(paths: SessionPaths, content: string): Promise<MemoryGenerationRef>;
 	save(paths: SessionPaths, state: SessionRefinementState): Promise<void>;
+	remove(path: string): Promise<void>;
+	cleanup(paths: SessionPaths, keep?: MemoryGenerationRef): Promise<void>;
 }
 
-const DEFAULT_DEPENDENCIES: CheckpointCommitDependencies = {
-	readMemory,
-	append: appendCheckpoint,
-	write: atomicWrite,
+const DEFAULT_DEPENDENCIES: CandidateCommitDependencies = {
+	writeGeneration: writeMemoryGeneration,
 	save: saveState,
+	remove: async (path) => { await rm(path, { force: true }); },
+	cleanup: cleanupMemoryGenerations,
 };
 
-function restoreState(target: SessionRefinementState, snapshot: SessionRefinementState): void {
+function replaceState(target: SessionRefinementState, next: SessionRefinementState): void {
 	for (const key of Object.keys(target) as Array<keyof SessionRefinementState>) delete target[key];
-	Object.assign(target, structuredClone(snapshot));
+	Object.assign(target, structuredClone(next));
 }
 
-export async function commitCheckpoint(options: {
+/** Write an immutable generation first, then atomically publish its state pointer. */
+export async function commitCandidatePublication(options: {
 	paths: SessionPaths;
 	state: SessionRefinementState;
-	body: string;
-	record: CheckpointRecord;
-	budgetTokens: number;
+	memory: string;
 	applyState(state: SessionRefinementState): void;
-	dependencies?: CheckpointCommitDependencies;
+	dependencies?: CandidateCommitDependencies;
 }): Promise<void> {
 	const dependencies = options.dependencies ?? DEFAULT_DEPENDENCIES;
-	const previousMemory = await dependencies.readMemory(options.paths.memory);
-	const previousState = structuredClone(options.state);
-	let memoryChanged = false;
+	const next = structuredClone(options.state);
+	options.applyState(next);
+	const generation = await dependencies.writeGeneration(options.paths, options.memory);
+	next.memoryGeneration = generation;
 	try {
-		await dependencies.append({ paths: options.paths, body: options.body, record: options.record, budgetTokens: options.budgetTokens });
-		memoryChanged = true;
-		options.applyState(options.state);
-		await dependencies.save(options.paths, options.state);
+		await dependencies.save(options.paths, next);
 	} catch (error) {
-		if (!memoryChanged) throw error;
-		restoreState(options.state, previousState);
-		try {
-			await dependencies.write(options.paths.memory, previousMemory);
-		} catch (rollbackError) {
-			throw new AggregateError([error, rollbackError], "Checkpoint state commit failed and memory rollback also failed.");
-		}
+		await dependencies.remove(join(options.paths.root, generation.file)).catch(() => undefined);
 		throw error;
 	}
+	replaceState(options.state, next);
+	await dependencies.cleanup(options.paths, generation).catch(() => undefined);
 }

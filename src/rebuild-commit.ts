@@ -1,36 +1,43 @@
-import type { SessionPaths, SessionRefinementState } from "./types.js";
-import { atomicWrite, readMemory } from "./memory-file.js";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import type { MemoryGenerationRef, SessionPaths, SessionRefinementState } from "./types.js";
+import { cleanupMemoryGenerations, writeMemoryGeneration } from "./memory-file.js";
 import { saveState } from "./session-store.js";
 
 interface RebuildCommitDependencies {
-	readMemory(path: string): Promise<string>;
-	write(path: string, content: string): Promise<void>;
+	writeGeneration(paths: SessionPaths, content: string): Promise<MemoryGenerationRef>;
 	save(paths: SessionPaths, state: SessionRefinementState): Promise<void>;
+	remove(path: string): Promise<void>;
+	cleanup(paths: SessionPaths, keep?: MemoryGenerationRef): Promise<void>;
 }
 
 const DEFAULT_DEPENDENCIES: RebuildCommitDependencies = {
-	readMemory,
-	write: atomicWrite,
+	writeGeneration: writeMemoryGeneration,
 	save: saveState,
+	remove: async (path) => { await rm(path, { force: true }); },
+	cleanup: cleanupMemoryGenerations,
 };
 
+/** Rebuild publication is the same generation-first transaction, followed by best-effort legacy cleanup. */
 export async function commitRebuiltMemory(options: {
 	paths: SessionPaths;
 	memory: string;
 	state: SessionRefinementState;
 	dependencies?: RebuildCommitDependencies;
-}): Promise<void> {
+}): Promise<SessionRefinementState> {
 	const dependencies = options.dependencies ?? DEFAULT_DEPENDENCIES;
-	const previousMemory = await dependencies.readMemory(options.paths.memory);
-	await dependencies.write(options.paths.memory, options.memory);
+	const next = structuredClone(options.state);
+	const generation = options.memory ? await dependencies.writeGeneration(options.paths, options.memory) : undefined;
+	next.memoryGeneration = generation;
 	try {
-		await dependencies.save(options.paths, options.state);
+		await dependencies.save(options.paths, next);
 	} catch (error) {
-		try {
-			await dependencies.write(options.paths.memory, previousMemory);
-		} catch (rollbackError) {
-			throw new AggregateError([error, rollbackError], "Rebuild state commit failed and active memory rollback also failed.");
-		}
+		if (generation) await dependencies.remove(join(options.paths.root, generation.file)).catch(() => undefined);
 		throw error;
 	}
+	await dependencies.cleanup(options.paths, generation).catch(() => undefined);
+	await dependencies.remove(options.paths.memory).catch(() => undefined);
+	// V2 has no overflow side file; remove any v1 residue only after the v2 pointer is durable.
+	await dependencies.remove(join(options.paths.root, "pending.md")).catch(() => undefined);
+	return next;
 }

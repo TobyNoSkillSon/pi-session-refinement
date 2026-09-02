@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { RefinementController } from "../src/lifecycle.ts";
-import { appendCheckpoint, atomicWrite, formatCheckpoint, getSessionPaths, MEMORY_HEADER } from "../src/memory-file.ts";
+import { memoryRecordsMatchBranch, RefinementController } from "../src/lifecycle.ts";
+import { appendRecordToMemory, atomicWrite, getSessionPaths, LEGACY_MEMORY_HEADER, writeMemoryGeneration } from "../src/memory-file.ts";
+import { createCheckpointRecord } from "../src/rolling-memory.ts";
+import { saveState } from "../src/session-store.ts";
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -17,109 +19,88 @@ function configuredController(): any {
 	const controller: any = new RefinementController({} as any);
 	controller.active = true;
 	controller.firstPrompt = false;
-	controller.state = { version: 1, sessionId: "session", toolCallsSinceRun: 0, checkpoints: [], warnings: [] };
-	controller.paths = { root: "/tmp/session", memory: "/tmp/session/memory.md", pending: "/tmp/session/pending.md", state: "/tmp/session/state.json" };
+	controller.state = { version: 2, sessionId: "session", toolCallsSinceRun: 0, records: [], warnings: [] };
+	controller.paths = { root: "/tmp/session", memory: "/tmp/session/memory.md", state: "/tmp/session/state.json" };
 	controller.loadedConfig = {
-		config: { enabled: true, model: "current", thinking: "high", memoryBudgetTokens: 32_000, triggers: { contextPercent: 80, elapsedMinutes: 40, minimumToolCalls: 25 }, runOnManualCompaction: true, maxAttempts: 3 },
+		config: { enabled: true, model: "current", thinking: "high", consolidator: { model: "current", thinking: "high" }, memoryBudgetTokens: 32_000, triggers: { contextPercent: 80, elapsedMinutes: 40, minimumToolCalls: 25 }, runOnManualCompaction: true, maxAttempts: 3 },
 		issues: [],
 	};
 	return controller;
 }
 
-const ctx = {
-	mode: "tui",
-	hasUI: true,
-	ui: { notify() {}, setWidget() {} },
-} as any;
+const ctx = { mode: "tui", hasUI: true, ui: { notify() {}, setWidget() {} } } as any;
+const message = (id: string, content = id) => ({ type: "message", id, parentId: null, timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content, timestamp: 1 } }) as any;
+const toolResult = (id: string) => ({ type: "message", id, parentId: null, timestamp: "2026-01-01T00:00:00Z", message: { role: "toolResult", toolCallId: id, toolName: "probe", content: [], isError: false, timestamp: 1 } }) as any;
 
-const message = (id: string, parentId: string | null, content: string) => ({
-	type: "message", id, parentId, timestamp: "2026-01-01T00:00:00Z",
-	message: { role: "user", content, timestamp: 1 },
-}) as any;
-
-const toolResult = (id: string, parentId: string | null) => ({
-	type: "message", id, parentId, timestamp: "2026-01-01T00:00:00Z",
-	message: { role: "toolResult", toolCallId: id, toolName: "probe", content: [], isError: false, timestamp: 1 },
-}) as any;
-
-test("early compaction error does not reuse a stale extension context", async () => {
+test("early compaction errors use a captured fail-open notifier", async () => {
 	const controller = configuredController();
 	let callbacks: { onError(error: Error): void } | undefined;
 	let stale = false;
-	const notifications: Array<{ message: string; type: string }> = [];
-	const ui = {
-		notify(message: string, type: string) { notifications.push({ message, type }); },
-	};
+	const notifications: string[] = [];
+	const ui = { notify(message: string) { notifications.push(message); } };
 	const compactionCtx = {
 		getContextUsage: () => ({ percent: 81 }),
 		compact(options: { onError(error: Error): void }) { callbacks = options; },
-		get ui() {
-			if (stale) throw new Error("stale extension context");
-			return ui;
-		},
+		get ui() { if (stale) throw new Error("stale context"); return ui; },
 	} as any;
-
 	await controller.agentSettled(compactionCtx);
-	assert.ok(callbacks);
 	stale = true;
-	assert.doesNotThrow(() => callbacks?.onError(new Error("Compaction cancelled")));
-	assert.equal(controller.contextCompactionRequested, false);
-	assert.deepEqual(notifications, [{
-		message: "[Session Refinement] Early compaction failed: Compaction cancelled",
-		type: "warning",
-	}]);
+	assert.doesNotThrow(() => callbacks?.onError(new Error("cancelled")));
+	assert.deepEqual(notifications, ["[Session Refinement] Early compaction failed: cancelled"]);
 });
 
-test("early compaction error tolerates a disposed captured UI", async () => {
+test("consolidation warning pauses mutation but never disables early context compaction", async () => {
 	const controller = configuredController();
-	let callbacks: { onError(error: Error): void } | undefined;
-	let disposed = false;
-	const compactionCtx = {
-		getContextUsage: () => ({ percent: 81 }),
-		compact(options: { onError(error: Error): void }) { callbacks = options; },
-		ui: {
-			notify() {
-				if (disposed) throw new Error("disposed UI");
-			},
-		},
-	} as any;
-
-	await controller.agentSettled(compactionCtx);
-	assert.ok(callbacks);
-	disposed = true;
-	assert.doesNotThrow(() => callbacks?.onError(new Error("Compaction cancelled")));
-	assert.equal(controller.contextCompactionRequested, false);
+	controller.state.warnings = [{ code: "consolidation-failed", message: "rebuild" }];
+	let compacted = 0;
+	await controller.agentSettled({
+		getContextUsage: () => ({ percent: 80 }),
+		compact() { compacted++; },
+		ui: { notify() {} },
+	} as any);
+	assert.equal(compacted, 1);
+	controller.toolResult();
+	assert.equal(controller.state.toolCallsSinceRun, 0);
 });
 
-test("background examination failure does not reuse a stale extension context", async () => {
+test("background examination failure does not reuse a stale context", async () => {
 	const controller = configuredController();
 	controller.state.lastAttemptAt = "2020-01-01T00:00:00.000Z";
 	controller.state.lastProcessedEntryId = "a";
 	controller.state.toolCallsSinceRun = 1;
-	controller.loadedConfig.config.triggers = { contextPercent: 100, elapsedMinutes: 0, minimumToolCalls: 1 };
+	controller.loadedConfig.config.triggers = { contextPercent: 99, elapsedMinutes: 1, minimumToolCalls: 1 };
 	const gate = deferred<any>();
 	controller.runExamination = () => gate.promise;
 	let stale = false;
 	const notifications: string[] = [];
-	const ui = { notify(message: string) { notifications.push(message); } };
 	const backgroundCtx = {
 		getContextUsage: () => ({ percent: 1 }),
-		sessionManager: { getBranch: () => [message("a", null, "one"), message("b", "a", "two")] },
-		get ui() {
-			if (stale) throw new Error("stale extension context");
-			return ui;
-		},
+		sessionManager: { getBranch: () => [message("a"), message("b")] },
+		get ui() { if (stale) throw new Error("stale"); return { notify(message: string) { notifications.push(message); } }; },
 	} as any;
-
 	await controller.agentSettled(backgroundCtx);
 	const run = controller.currentRun;
-	assert.ok(run);
 	stale = true;
 	gate.reject(new Error("examiner failed"));
-	const result = await run;
-	assert.equal(result.ok, false);
-	assert.match(result.error, /examiner failed/);
-	assert.deepEqual(notifications, ["[Session Refinement] Background examination failed: examiner failed"]);
+	assert.equal((await run).ok, false);
+	assert.match(notifications[0], /examiner failed/);
+});
+
+test("an old background finalizer cannot clear a newer session operation handle", async () => {
+	const controller = configuredController();
+	controller.state.lastAttemptAt = "2020-01-01T00:00:00.000Z";
+	controller.state.lastProcessedEntryId = "a";
+	controller.state.toolCallsSinceRun = 1;
+	controller.loadedConfig.config.triggers = { contextPercent: 99, elapsedMinutes: 1, minimumToolCalls: 1 };
+	const old = deferred<any>();
+	controller.runExamination = () => old.promise;
+	await controller.agentSettled({ getContextUsage: () => ({ percent: 1 }), sessionManager: { getBranch: () => [message("a"), message("b")] }, ui: { notify() {} } } as any);
+	const oldHandle = controller.currentRun;
+	const replacement = Promise.resolve({ ok: true });
+	controller.currentRun = replacement;
+	old.resolve({ ok: true, attempts: 1, fallbackUsed: false });
+	await oldHandle;
+	assert.equal(controller.currentRun, replacement);
 });
 
 test("before_agent_start waits for a foreground rebuild", async () => {
@@ -134,257 +115,257 @@ test("before_agent_start waits for a foreground rebuild", async () => {
 	assert.equal(await prompt, "system");
 });
 
-test("compaction cancellation stops waiting for unrelated background refinement", async () => {
-	const controller = configuredController();
-	const gate = deferred<any>();
-	controller.currentRun = gate.promise;
-	const abort = new AbortController();
-	const waiting = controller.beforeCompact({
-		reason: "threshold",
-		preparation: { firstKeptEntryId: "next" },
-		branchEntries: [],
-		signal: abort.signal,
-	}, ctx);
-	abort.abort();
-	await waiting;
-	gate.resolve({ ok: true });
-});
-
-test("ordinary shutdown aborts a background examiner before awaiting it", async () => {
-	const previous = process.env.PI_AGENT_RUNNER_ROLE;
-	delete process.env.PI_AGENT_RUNNER_ROLE;
-	try {
-		const controller: any = new RefinementController({} as any);
-		controller.currentRun = new Promise((resolve) => {
-			controller.abortController.signal.addEventListener("abort", () => resolve({ ok: false, cancelled: true }), { once: true });
-		});
-		await controller.shutdown();
-		assert.equal(controller.abortController.signal.aborted, true);
-	} finally {
-		if (previous === undefined) delete process.env.PI_AGENT_RUNNER_ROLE;
-		else process.env.PI_AGENT_RUNNER_ROLE = previous;
-	}
-});
-
-test("fork inheritance starts the elapsed trigger clock", async () => {
-	const storageRoot = await mkdtemp(join(tmpdir(), "pi-session-refinement-fork-clock-"));
-	const previousRoot = process.env.PI_SESSION_REFINEMENT_ROOT;
-	process.env.PI_SESSION_REFINEMENT_ROOT = storageRoot;
-	try {
-		const parent = getSessionPaths(storageRoot, "parent-session");
-		await appendCheckpoint({
-			paths: parent,
-			body: "shared memory",
-			record: { throughEntryId: "shared", createdAt: "2026-01-01T00:00:00Z", trigger: "time" },
-			budgetTokens: 32_000,
-		});
-		const parentSessionFile = join(storageRoot, "parent.jsonl");
-		await atomicWrite(parentSessionFile, `${JSON.stringify({ type: "session", id: "parent-session", cwd: "/tmp", timestamp: "2026-01-01T00:00:00Z" })}
-`);
-		const controller: any = new RefinementController({} as any);
-		const before = Date.now();
-		await controller.sessionStart({ reason: "fork", previousSessionFile: parentSessionFile }, {
-			sessionManager: {
-				getSessionFile: () => join(storageRoot, "fork.jsonl"),
-				getSessionId: () => "fork-session",
-				getBranch: () => [message("shared", null, "shared")],
-			},
-		} as any);
-		const timestamp = Date.parse(controller.state.lastAttemptAt);
-		assert.ok(Number.isFinite(timestamp));
-		assert.ok(timestamp >= before && timestamp <= Date.now());
-	} finally {
-		if (previousRoot === undefined) delete process.env.PI_SESSION_REFINEMENT_ROOT;
-		else process.env.PI_SESSION_REFINEMENT_ROOT = previousRoot;
-		await rm(storageRoot, { recursive: true, force: true });
-	}
-});
-
-test("pre-compaction refinement preserves retained tool-result activity", async () => {
+test("pre-compaction refinement preserves retained tool activity", async () => {
 	const controller = configuredController();
 	controller.state.lastProcessedEntryId = "cursor";
 	controller.state.toolCallsSinceRun = 2;
-	const entries = [
-		message("cursor", null, "already processed"),
-		message("prefix", "cursor", "about to compact"),
-		message("kept", "prefix", "retained user message"),
-		toolResult("retained-result", "kept"),
-	];
-	let captured: { throughEntryId?: string; retainedToolCalls?: number } = {};
+	const entries = [message("cursor"), message("prefix"), message("kept"), toolResult("retained-result")];
+	let captured: any;
 	controller.runExamination = async (segment: any, _trigger: any, _ctx: any, _activate: any, _signal: any, retainedToolCalls: number) => {
-		captured = { throughEntryId: segment.throughEntryId, retainedToolCalls };
-		return { ok: true, appended: true, attempts: 1, fallbackUsed: false };
+		captured = { through: segment.throughEntryId, retainedToolCalls };
+		return { ok: true, attempts: 1, fallbackUsed: false };
 	};
-	await controller.beforeCompact({
-		reason: "threshold",
-		preparation: { firstKeptEntryId: "kept" },
-		branchEntries: entries,
-		signal: new AbortController().signal,
-	}, ctx);
-	assert.deepEqual(captured, { throughEntryId: "prefix", retainedToolCalls: 1 });
+	await controller.beforeCompact({ reason: "threshold", preparation: { firstKeptEntryId: "kept" }, branchEntries: entries, signal: new AbortController().signal }, ctx);
+	assert.deepEqual(captured, { through: "prefix", retainedToolCalls: 1 });
 });
 
-test("resume with a baseline cursor creates its first memory checkpoint", async () => {
+test("valid v1 memory is injected read-only and warns on every turn", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-v1-"));
+	const previousRoot = process.env.PI_SESSION_REFINEMENT_ROOT;
+	process.env.PI_SESSION_REFINEMENT_ROOT = root;
+	try {
+		const paths = getSessionPaths(root, "session");
+		const meta = JSON.stringify({ throughEntryId: "old", createdAt: "2025-01-01T00:00:00Z", trigger: "time" });
+		await atomicWrite(paths.memory, `${LEGACY_MEMORY_HEADER.trimEnd()}\n\n<!-- pi-session-refinement:${meta} -->\n\n---\n\n## Memory checkpoint — 2025-01-01T00:00:00Z\n\nLEGACY_BODY\n`);
+		await saveState(paths, { version: 1, sessionId: "session", lastProcessedEntryId: "old", toolCallsSinceRun: 7, checkpoints: [{ throughEntryId: "old", createdAt: "2025-01-01T00:00:00Z", trigger: "time" }], warnings: [{ code: "budget-exceeded", message: "legacy overflow" }] });
+		const memoryBefore = await readFile(paths.memory, "utf8");
+		const stateBefore = await readFile(paths.state, "utf8");
+		const controller: any = new RefinementController({} as any);
+		const notifications: string[] = [];
+		const context = { mode: "rpc", ui: { notify(value: string) { notifications.push(value); } }, sessionManager: { getSessionFile: () => join(root, "session.jsonl"), getSessionId: () => "session", getBranch: () => [message("old")] } } as any;
+		await controller.sessionStart({ reason: "startup" }, context);
+		const first = await controller.beforeAgentStart(context, "SYSTEM");
+		const second = await controller.beforeAgentStart(context, "SYSTEM");
+		assert.match(first, /LEGACY_BODY/);
+		assert.match(first, /session-refinement-rebuild/);
+		assert.match(second, /session-refinement-rebuild/);
+		assert.equal(notifications.filter((value) => /valid v1/.test(value)).length, 2);
+		assert.equal(controller.state, undefined);
+		assert.equal(await readFile(paths.memory, "utf8"), memoryBefore);
+		assert.equal(await readFile(paths.state, "utf8"), stateBefore);
+	} finally {
+		if (previousRoot === undefined) delete process.env.PI_SESSION_REFINEMENT_ROOT; else process.env.PI_SESSION_REFINEMENT_ROOT = previousRoot;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("invalid v1 prose or cursor metadata is rebuild-only and never injected", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-invalid-v1-"));
+	const previousRoot = process.env.PI_SESSION_REFINEMENT_ROOT;
+	process.env.PI_SESSION_REFINEMENT_ROOT = root;
+	try {
+		const paths = getSessionPaths(root, "session");
+		const meta = JSON.stringify({ throughEntryId: "old", createdAt: "2025-01-01T00:00:00Z", trigger: "time" });
+		await atomicWrite(paths.memory, `${LEGACY_MEMORY_HEADER.trimEnd()}\nUNTRACKED\n\n<!-- pi-session-refinement:${meta} -->\n\n---\n\n## Memory checkpoint — 2025-01-01T00:00:00Z\n\nDO_NOT_INJECT\n`);
+		await saveState(paths, { version: 1, sessionId: "session", lastProcessedEntryId: "wrong-cursor", toolCallsSinceRun: 0, checkpoints: [{ throughEntryId: "old", createdAt: "2025-01-01T00:00:00Z", trigger: "time" }], warnings: [] });
+		const controller: any = new RefinementController({} as any);
+		const context = { mode: "rpc", ui: { notify() {} }, sessionManager: { getSessionFile: () => join(root, "session.jsonl"), getSessionId: () => "session", getBranch: () => [message("old")] } } as any;
+		await controller.sessionStart({ reason: "startup" }, context);
+		const prompt = await controller.beforeAgentStart(context, "SYSTEM");
+		assert.equal(controller.broken, true);
+		assert.doesNotMatch(prompt, /DO_NOT_INJECT/);
+		assert.match(prompt, /session-refinement-rebuild/);
+	} finally {
+		if (previousRoot === undefined) delete process.env.PI_SESSION_REFINEMENT_ROOT; else process.env.PI_SESSION_REFINEMENT_ROOT = previousRoot;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("historical sessions without memory require manual rebuild without creating state", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-history-"));
+	const previousRoot = process.env.PI_SESSION_REFINEMENT_ROOT;
+	process.env.PI_SESSION_REFINEMENT_ROOT = root;
+	try {
+		const controller: any = new RefinementController({} as any);
+		const context = { mode: "rpc", ui: { notify() {} }, sessionManager: { getSessionFile: () => join(root, "session.jsonl"), getSessionId: () => "session", getBranch: () => [message("history")] } } as any;
+		await controller.sessionStart({ reason: "startup" }, context);
+		const prompt = await controller.beforeAgentStart(context, "SYSTEM");
+		assert.match(prompt, /session-refinement-rebuild/);
+		assert.equal(controller.state, undefined);
+		await assert.rejects(() => import("node:fs/promises").then(({ readFile }) => readFile(getSessionPaths(root, "session").state)), /ENOENT/);
+	} finally {
+		if (previousRoot === undefined) delete process.env.PI_SESSION_REFINEMENT_ROOT; else process.env.PI_SESSION_REFINEMENT_ROOT = previousRoot;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("fork processing starts after its immutable floor", async () => {
 	const controller = configuredController();
 	controller.firstPrompt = true;
 	controller.stateExisted = true;
-	controller.startReason = "startup";
-	controller.injectedMemory = "";
-	controller.state.lastProcessedEntryId = "baseline";
-	let captured: { trigger?: string; fromEntryId?: string; activate?: boolean } = {};
-	controller.runExamination = async (segment: any, trigger: string, _ctx: any, activate: boolean) => {
-		captured = { trigger, fromEntryId: segment.fromEntryId, activate };
-		return { ok: true, appended: true, attempts: 1, fallbackUsed: false };
-	};
-	await controller.beforeAgentStart({
-		...ctx,
-		sessionManager: { getBranch: () => [
-			{ type: "model_change", id: "baseline", parentId: null, timestamp: "2026-01-01T00:00:00Z" },
-			message("first", "baseline", "first completed turn"),
-		] },
-	} as any, "system");
-	assert.deepEqual(captured, { trigger: "resume", fromEntryId: "first", activate: true });
+	controller.startReason = "fork";
+	controller.state.fork = { floorEntryId: "floor", inheritedRecordCount: 0 };
+	controller.state.lastProcessedEntryId = "floor";
+	let from: string | undefined;
+	controller.runExamination = async (segment: any) => { from = segment.fromEntryId; return { ok: true, attempts: 1, fallbackUsed: false }; };
+	await controller.beforeAgentStart({ ...ctx, sessionManager: { getBranch: () => [message("ancestor"), message("floor"), message("local")] } } as any, "SYSTEM");
+	assert.equal(from, "local");
 });
 
-test("a genuinely new startup does not refine its first prompt synchronously", async () => {
-	const controller = configuredController();
-	controller.firstPrompt = true;
-	controller.stateExisted = false;
-	controller.startReason = "startup";
-	controller.injectedMemory = "";
-	controller.state.lastProcessedEntryId = "baseline";
-	let examinations = 0;
-	controller.runExamination = async () => { examinations++; };
-	await controller.beforeAgentStart({
-		...ctx,
-		sessionManager: { getBranch: () => [
-			{ type: "model_change", id: "baseline", parentId: null, timestamp: "2026-01-01T00:00:00Z" },
-			message("first", "baseline", "initial prompt"),
-		] },
-	} as any, "system");
-	assert.equal(examinations, 0);
-});
-
-test("a historical session without refinement state still requires an authorized rebuild", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-legacy-"));
-	try {
-		const controller = configuredController();
-		controller.paths = getSessionPaths(root, "session");
-		controller.firstPrompt = true;
-		controller.stateExisted = false;
-		controller.startReason = "startup";
-		controller.injectedMemory = "";
-		controller.state.lastProcessedEntryId = undefined;
-		let examinations = 0;
-		controller.runExamination = async () => { examinations++; };
-		await controller.beforeAgentStart({
-			...ctx,
-			sessionManager: { getBranch: () => [message("existing", null, "historical prompt")] },
-		} as any, "system");
-		assert.equal(examinations, 0);
-		assert.equal(controller.state.warnings[0]?.code, "rebuild-required");
-	} finally {
-		await rm(root, { recursive: true, force: true });
-	}
-});
-
-test("attempt completion preserves retained and in-flight tool activity", () => {
-	const controller = configuredController();
-	controller.state.toolCallsSinceRun = 5;
-	controller.recordAttemptCompletion(controller.state, 3, 1);
-	assert.equal(controller.state.toolCallsSinceRun, 3, "one retained result plus two arriving during examination");
-	assert.ok(Number.isFinite(Date.parse(controller.state.lastAttemptAt)));
-});
-
-test("missing memory with recorded checkpoints is treated as broken state", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-missing-memory-"));
+test("missing memory for recorded v2 records is broken", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-broken-"));
 	try {
 		const controller = configuredController();
 		controller.paths = getSessionPaths(root, "session");
 		controller.firstPrompt = true;
 		controller.stateExisted = true;
-		controller.startReason = "startup";
-		controller.injectedMemory = "";
 		controller.state.lastProcessedEntryId = "checkpoint";
-		controller.state.checkpoints = [{ throughEntryId: "checkpoint", createdAt: "2026-01-01T00:00:00Z", trigger: "time" }];
-		let examinations = 0;
-		controller.runExamination = async () => { examinations++; };
-		await controller.beforeAgentStart({
-			...ctx,
-			sessionManager: { getBranch: () => [
-				message("checkpoint", null, "previously checkpointed"),
-				message("tail", "checkpoint", "new tail"),
-			] },
-		} as any, "system");
-		assert.equal(examinations, 0);
+		controller.state.records = [createCheckpointRecord({ throughEntryId: "checkpoint", createdAt: "2026-01-01T00:00:00Z", trigger: "time" })];
+		await controller.beforeAgentStart({ ...ctx, sessionManager: { getBranch: () => [message("checkpoint"), message("tail")] } } as any, "system");
 		assert.equal(controller.broken, true);
-		assert.equal(controller.state.warnings[0]?.code, "broken-state");
-	} finally {
-		await rm(root, { recursive: true, force: true });
-	}
+		assert.equal(controller.state.warnings[0].code, "broken-state");
+	} finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("truncated or unrelated memory cannot resume from checkpointed state", async () => {
-	const bodylessMetadata = JSON.stringify({ throughEntryId: "checkpoint", createdAt: "2026-01-01T00:00:00Z", trigger: "time" });
-	const memories = [
-		MEMORY_HEADER,
-		`${MEMORY_HEADER}${formatCheckpoint("unrelated", { throughEntryId: "other", createdAt: "2026-01-01T00:00:00Z", trigger: "time" })}`,
-		`${MEMORY_HEADER}\n<!-- pi-session-refinement:${bodylessMetadata} -->\n\n---\n\n## Memory checkpoint — 2026-01-01T00:00:00Z\n`,
-	];
-	for (const injectedMemory of memories) {
-		const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-inconsistent-memory-"));
-		try {
-			const controller = configuredController();
-			controller.paths = getSessionPaths(root, "session");
-			controller.firstPrompt = true;
-			controller.stateExisted = true;
-			controller.startReason = "startup";
-			controller.injectedMemory = injectedMemory;
-			controller.state.lastProcessedEntryId = "checkpoint";
-			controller.state.checkpoints = [{ throughEntryId: "checkpoint", createdAt: "2026-01-01T00:00:00Z", trigger: "time" }];
-			let examinations = 0;
-			controller.runExamination = async () => { examinations++; };
-			await controller.beforeAgentStart({
-				...ctx,
-				sessionManager: { getBranch: () => [
-					message("checkpoint", null, "previously checkpointed"),
-					message("tail", "checkpoint", "new tail"),
-				] },
-			} as any, "system");
-			assert.equal(examinations, 0);
-			assert.equal(controller.broken, true);
-			assert.equal(controller.state.warnings[0]?.code, "broken-state");
-		} finally {
-			await rm(root, { recursive: true, force: true });
-		}
-	}
-});
-
-test("a checkpoint cursor divergent from memory metadata is treated as broken", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-divergent-cursor-"));
+test("fork rebuild reads the authoritative generation rather than a stale injected snapshot", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-fork-baseline-"));
 	try {
-		const record = { throughEntryId: "checkpoint", createdAt: "2026-01-01T00:00:00Z", trigger: "time" } as const;
+		const controller = configuredController();
+		controller.sessionId = "session";
+		controller.paths = getSessionPaths(root, "session");
+		const record = createCheckpointRecord({ throughEntryId: "shared", createdAt: "2026-01-01T00:00:00Z", trigger: "time" });
+		const memory = appendRecordToMemory("", "AUTHORITATIVE_INHERITED", record);
+		controller.state = { version: 2, sessionId: "session", toolCallsSinceRun: 0, records: [record], lastProcessedEntryId: "floor", fork: { floorEntryId: "floor", inheritedRecordCount: 1 }, warnings: [], memoryGeneration: await writeMemoryGeneration(controller.paths, memory) };
+		controller.injectedMemory = appendRecordToMemory("", "STALE_INJECTED", record);
+		const baseline = await controller.rebuildBaseline();
+		assert.match(baseline.memory, /AUTHORITATIVE_INHERITED/);
+		assert.doesNotMatch(baseline.memory, /STALE_INJECTED/);
+		assert.equal(baseline.floor, "floor");
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("invalid v1 fork rebuild applies the explicit lossy baseline rule but keeps its floor", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-v1-lossy-"));
+	try {
+		const controller = configuredController();
+		controller.sessionId = "child";
+		controller.paths = getSessionPaths(root, "child");
+		controller.state = undefined;
+		controller.legacyState = { version: 1, sessionId: "child", lastProcessedEntryId: "floor", toolCallsSinceRun: 0, checkpoints: [{ throughEntryId: "shared", createdAt: "2025-01-01T00:00:00Z", trigger: "fork" }], warnings: [], fork: { floorEntryId: "floor", inheritedCheckpointCount: 1 } };
+		await atomicWrite(controller.paths.memory, "corrupt inherited prose");
+		const baseline = await controller.rebuildBaseline();
+		assert.equal(baseline.memory, "");
+		assert.equal(baseline.floor, "floor");
+		assert.deepEqual(baseline.state.fork, { floorEntryId: "floor", inheritedRecordCount: 0 });
+		assert.equal(baseline.state.lastProcessedEntryId, "floor");
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("rebuild baseline retains still-applicable missing-model warnings", async () => {
+	const controller = configuredController();
+	controller.sessionId = "session";
+	controller.state.warnings = [
+		{ code: "missing-model", message: "examiner missing" },
+		{ code: "missing-consolidator-model", message: "consolidator missing" },
+		{ code: "consolidation-failed", message: "old failure" },
+	];
+	const baseline = await controller.rebuildBaseline();
+	assert.deepEqual(baseline.state.warnings.map((warning: any) => warning.code), ["missing-model", "missing-consolidator-model"]);
+});
+
+test("rebuild segments use the normal staged path and publish only its consolidated result", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-rebuild-stage-"));
+	try {
+		const controller = configuredController();
+		controller.sessionId = "session";
+		controller.paths = getSessionPaths(root, "session");
+		controller.injectedMemory = "";
+		let stagedCalls = 0;
+		controller.runExaminationWithTarget = async (segment: any, trigger: string, _ctx: any, paths: any, state: any) => {
+			stagedCalls++;
+			assert.equal(trigger, "rebuild");
+			const checkpoint = createCheckpointRecord({ throughEntryId: segment.throughEntryId, createdAt: "2026-01-02T00:00:00Z", cutoffAt: segment.cutoffAt, trigger: "rebuild" });
+			const consolidation = { ...checkpoint, kind: "consolidation", generation: 1, sourceRecordCount: 1 } as const;
+			const memory = appendRecordToMemory("", "### Learned information and decisions\n\n- Consolidated rebuild result.", consolidation);
+			state.records = [consolidation];
+			state.lastProcessedEntryId = segment.throughEntryId;
+			state.memoryGeneration = await writeMemoryGeneration(paths, memory);
+			return { ok: true, attempts: 1, fallbackUsed: false };
+		};
+		const notifications: string[] = [];
+		const context = {
+			mode: "rpc", cwd: root,
+			ui: { notify(message: string) { notifications.push(message); }, setWidget() {} },
+			sessionManager: { getBranch: () => [message("entry", "history")] },
+		} as any;
+		assert.equal(await controller.performRebuild(context, new AbortController().signal), true);
+		assert.equal(stagedCalls, 1);
+		assert.match(controller.injectedMemory, /Consolidated rebuild result/);
+		assert.equal(controller.state.records[0].kind, "consolidation");
+		assert.match(notifications.at(-1) ?? "", /rebuilt from 1 chronological segment/);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test("rebuild staging consolidates an oversized inherited baseline even with no fork-local tail", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-rebuild-baseline-roll-"));
+	try {
+		const controller = configuredController();
+		controller.sessionId = "session";
+		controller.paths = getSessionPaths(root, "session");
+		controller.loadedConfig.config.memoryBudgetTokens = 100;
+		const exact = createCheckpointRecord({ fromEntryId: "floor", throughEntryId: "floor", createdAt: "2026-01-01T00:00:00Z", trigger: "fork" });
+		const baselineMemory = appendRecordToMemory("", "x".repeat(500), exact);
+		const baselineState = { version: 2, sessionId: "session", toolCallsSinceRun: 0, records: [exact], warnings: [], lastProcessedEntryId: "floor", fork: { floorEntryId: "floor", inheritedRecordCount: 1 } };
+		controller.rebuildBaseline = async () => ({ memory: baselineMemory, state: structuredClone(baselineState), floor: "floor" });
+		let consolidated = 0;
+		controller.consolidateCandidate = async () => {
+			consolidated++;
+			const record = { ...exact, kind: "consolidation", generation: 1, sourceRecordCount: 1, trigger: "consolidation" } as const;
+			return { memory: appendRecordToMemory("", "### Learned information and decisions\n\n- compact baseline", record), range: { start: 0, count: 1 } };
+		};
+		const context = {
+			mode: "rpc", cwd: root, model: { provider: "synthetic", id: "model" }, modelRegistry: {}, getContextUsage: () => undefined,
+			ui: { notify() {}, setWidget() {} },
+			sessionManager: { getBranch: () => [message("floor")] },
+		} as any;
+		assert.equal(await controller.performRebuild(context, new AbortController().signal), true);
+		assert.equal(consolidated, 1);
+		assert.equal(controller.state.records[0].kind, "consolidation");
+		assert.equal(controller.state.fork.inheritedRecordCount, 1);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("ordinary shutdown aborts background work", async () => {
+	const controller: any = new RefinementController({} as any);
+	controller.currentRun = new Promise((resolve) => controller.abortController.signal.addEventListener("abort", () => resolve({ ok: false, cancelled: true }), { once: true }));
+	await controller.shutdown();
+	assert.equal(controller.abortController.signal.aborted, true);
+});
+
+test("v2 memory source cursors must form an ordered prefix of the active branch", () => {
+	const records = [
+		createCheckpointRecord({ fromEntryId: "a", throughEntryId: "b", createdAt: "2026-01-01T00:00:00Z", trigger: "time" }),
+		createCheckpointRecord({ fromEntryId: "c", throughEntryId: "c", createdAt: "2026-01-02T00:00:00Z", trigger: "time" }),
+	];
+	const branch = [message("a"), message("b"), message("c")];
+	assert.equal(memoryRecordsMatchBranch({ version: 2, sessionId: "session", toolCallsSinceRun: 0, records, warnings: [], lastProcessedEntryId: "c" }, branch), true);
+	assert.equal(memoryRecordsMatchBranch({ version: 2, sessionId: "session", toolCallsSinceRun: 0, records: [{ ...records[0], throughEntryId: "missing" }], warnings: [], lastProcessedEntryId: "missing" }, branch), false);
+	assert.equal(memoryRecordsMatchBranch({ version: 2, sessionId: "session", toolCallsSinceRun: 0, records, warnings: [], lastProcessedEntryId: "c", fork: { floorEntryId: "b", inheritedRecordCount: 2 } }, branch), false);
+});
+
+test("exhausted consolidation persists a rebuild-required pause while Pi stays usable", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-consolidation-failure-"));
+	try {
 		const controller = configuredController();
 		controller.paths = getSessionPaths(root, "session");
-		controller.firstPrompt = true;
-		controller.stateExisted = true;
-		controller.startReason = "startup";
-		controller.injectedMemory = `${MEMORY_HEADER}${formatCheckpoint("valid checkpoint", record)}`;
-		controller.state.lastProcessedEntryId = "uncheckpointed-tail";
-		controller.state.checkpoints = [record];
-		let examinations = 0;
-		controller.runExamination = async () => { examinations++; };
-		await controller.beforeAgentStart({
-			...ctx,
-			sessionManager: { getBranch: () => [
-				message("checkpoint", null, "checkpointed"),
-				message("uncheckpointed-tail", "checkpoint", "tail"),
-			] },
-		} as any, "system");
-		assert.equal(examinations, 0);
-		assert.equal(controller.broken, true);
-		assert.equal(controller.state.warnings[0]?.code, "broken-state");
-	} finally {
-		await rm(root, { recursive: true, force: true });
-	}
+		const notices: string[] = [];
+		await controller.pauseForConsolidationFailure(controller.state, controller.paths, "synthetic failure", { ui: { notify(message: string) { notices.push(message); } } } as any);
+		assert.equal(controller.automaticPaused(), true);
+		assert.equal(controller.state.warnings[0]?.code, "consolidation-failed");
+		assert.match(controller.state.warnings[0]?.rootInstruction ?? "", /session-refinement-rebuild/);
+		assert.match(notices.join("\n"), /Automatic refinement paused/);
+		const stored = JSON.parse(await readFile(controller.paths.state, "utf8"));
+		assert.equal(stored.warnings[0].code, "consolidation-failed");
+	} finally { await rm(root, { recursive: true, force: true }); }
 });

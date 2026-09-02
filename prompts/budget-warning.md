@@ -1,1 +1,0 @@
-Session refinement memory exceeded its configured token budget. Inform the user before doing unrelated work. Explain that automatic refinement has paused for this session, inspect `memory.md` and `pending.md`, and ask the user how they want the memory cleaned or merged before changing either file. Never delete or compress session memory without the user’s approval.
