@@ -14,6 +14,7 @@ import type { MemoryRecord, TriggerReason } from "./types.js";
 export const CONSOLIDATION_THRESHOLD_RATIO = 0.8;
 export const CONSOLIDATION_PREFIX_TARGET_RATIO = 0.5;
 export const CONSOLIDATION_HEADROOM_RATIO = 0.6;
+export const MAX_MINIMUM_CONSOLIDATION_BODY_TOKENS = 256;
 
 export function renderedMemoryTokens(memory: string): number {
 	return estimateTextTokens(renderMemoryForPrompt(memory));
@@ -86,6 +87,10 @@ function bodyAllowance(memory: string, all: ParsedMemoryRecord[], start: number,
 	return Math.max(0, Math.floor(availableBytes / 4));
 }
 
+function minimumUsefulBodyTokens(headroomTokens: number): number {
+	return Math.max(1, Math.min(MAX_MINIMUM_CONSOLIDATION_BODY_TOKENS, Math.floor(headroomTokens * 0.25)));
+}
+
 function legalRanges(total: number, inherited: number | undefined): Array<{ start: number; count: number }> {
 	if (inherited === undefined) return Array.from({ length: total }, (_, index) => ({ start: 0, count: index + 1 }));
 	if (!Number.isInteger(inherited) || inherited < 0 || inherited > total) throw new Error("Invalid fork inherited-record boundary.");
@@ -105,12 +110,13 @@ export function selectConsolidationPrefix(memory: string, budgetTokens: number, 
 	if (all.length === 0) throw new Error("Candidate memory has no valid v2 records to consolidate.");
 	const targetTokens = budgetTokens * CONSOLIDATION_PREFIX_TARGET_RATIO;
 	const headroomTokens = Math.floor(budgetTokens * CONSOLIDATION_HEADROOM_RATIO);
+	const minimumBodyTokens = minimumUsefulBodyTokens(headroomTokens);
 	const candidates = legalRanges(all.length, options.inheritedRecordCount).flatMap(({ start, count }) => {
 		const records = all.slice(start, start + count);
 		const createdAt = options.createdAt ?? records.at(-1)!.record.createdAt;
 		const replacementRecord = createConsolidationRecord(records, createdAt, options.trigger ?? records.at(-1)!.record.trigger);
 		const allowance = bodyAllowance(memory, all, start, count, replacementRecord, headroomTokens);
-		if (allowance < 1) return [];
+		if (allowance < minimumBodyTokens) return [];
 		const minimum = spliceRange(memory, all, start, count, "x", replacementRecord);
 		if (renderedMemoryTokens(minimum) > headroomTokens || renderedMemoryTokens(minimum) >= renderedMemoryTokens(memory)) return [];
 		const tokens = renderedMemoryTokens(materializeMemoryFromRecords(records));

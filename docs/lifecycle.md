@@ -18,7 +18,7 @@ After the configured elapsed time and root tool-result count, the examiner proce
 
 ## Rolling consolidation
 
-The host checks each staged candidate against 80% of `memoryBudgetTokens`. At the threshold, it selects an oldest legal whole-record range by rendered token mass, aiming closest to 50% of the budget. Existing consolidation records count as ordinary oldest records during later rolls.
+The host checks each staged candidate against 80% of `memoryBudgetTokens`. At the threshold, it selects an oldest legal whole-record range by rendered token mass, aiming closest to 50% of the budget. Ranges that satisfy the size equation but leave no practical model-output allowance are discarded. Existing consolidation records count as ordinary oldest records during later rolls.
 
 A separate isolated model turns that prefix into current continuity at the cutoff. Host metadata records its kind, generation, covered source cursor, underlying source-record count, creation time, and cutoff time. The retained suffix stays byte-exact. Empty, malformed, non-compressing, over-budget, and insufficient-headroom replacements are rejected.
 

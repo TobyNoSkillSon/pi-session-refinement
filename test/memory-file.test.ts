@@ -38,9 +38,12 @@ test("stores a complete v2 record with rolling metadata", async () => {
 	}
 });
 
-test("session paths and package sources contain no pending file", () => {
+test("session paths are confined and package sources contain no pending file", () => {
 	const paths = getSessionPaths("/tmp/agent", "session");
 	assert.deepEqual(Object.keys(paths).sort(), ["generations", "memory", "root", "state"]);
+	for (const sessionId of ["../escape", "a/b", "a\\b", ".", "..", " session"]) {
+		assert.throws(() => getSessionPaths("/tmp/agent", sessionId), /Invalid session identifier/);
+	}
 });
 
 test("authoritative generations are confined, hashed, and structurally exact", async () => {

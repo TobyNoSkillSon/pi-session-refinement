@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { memoryRecordsMatchBranch, RefinementController } from "../src/lifecycle.ts";
 import { appendRecordToMemory, atomicWrite, getSessionPaths, LEGACY_MEMORY_HEADER, writeMemoryGeneration } from "../src/memory-file.ts";
 import { createCheckpointRecord } from "../src/rolling-memory.ts";
-import { saveState } from "../src/session-store.ts";
+import { loadState, saveState } from "../src/session-store.ts";
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -367,5 +367,209 @@ test("exhausted consolidation persists a rebuild-required pause while Pi stays u
 		assert.match(notices.join("\n"), /Automatic refinement paused/);
 		const stored = JSON.parse(await readFile(controller.paths.state, "utf8"));
 		assert.equal(stored.warnings[0].code, "consolidation-failed");
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("an impossible legal consolidation range pauses automatic mutation without calling a model", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-impossible-roll-"));
+	try {
+		const controller = configuredController();
+		controller.sessionId = "session";
+		controller.paths = getSessionPaths(root, "session");
+		controller.loadedConfig.config.memoryBudgetTokens = 500;
+		const first = createCheckpointRecord({ fromEntryId: "a", throughEntryId: "b", createdAt: "2026-01-01T00:00:00Z", trigger: "time" });
+		const second = createCheckpointRecord({ fromEntryId: "c", throughEntryId: "d", createdAt: "2026-01-02T00:00:00Z", trigger: "time" });
+		let memory = appendRecordToMemory("", "a".repeat(1_000), first);
+		memory = appendRecordToMemory(memory, "b".repeat(1_000), second);
+		controller.state = {
+			version: 2, sessionId: "session", lastProcessedEntryId: "d", toolCallsSinceRun: 0,
+			records: [first, second], warnings: [], fork: { floorEntryId: "b", inheritedRecordCount: 1 },
+			memoryGeneration: await writeMemoryGeneration(controller.paths, memory),
+		};
+		await saveState(controller.paths, controller.state);
+		const notices: string[] = [];
+		const outcome = await controller.consolidateCandidate({
+			memory, trigger: "time", paths: controller.paths, state: controller.state,
+			model: { provider: "synthetic", id: "must-not-run" },
+			activity: { update() {}, clear() {} }, base: "test", signal: new AbortController().signal,
+			ctx: { cwd: root, ui: { notify(message: string) { notices.push(message); } } },
+		});
+		assert.equal(outcome.failure?.ok, false);
+		assert.equal(outcome.memory, memory);
+		assert.match(outcome.failure?.error ?? "", /No legal consolidation range/);
+		assert.equal(controller.automaticPaused(), true);
+		assert.equal(JSON.parse(await readFile(controller.paths.state, "utf8")).warnings[0].code, "consolidation-failed");
+		assert.match(notices.join("\n"), /Automatic refinement paused/);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("startup without state removes crash-orphaned generations before creating a baseline", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-orphan-startup-"));
+	try {
+		const controller = configuredController();
+		controller.storageRoot = root;
+		const paths = getSessionPaths(root, "fresh-session");
+		const record = createCheckpointRecord({ throughEntryId: "orphan", createdAt: "2026-01-01T00:00:00Z", trigger: "time" });
+		await writeMemoryGeneration(paths, appendRecordToMemory("", "orphan", record));
+		const context = {
+			mode: "rpc", cwd: root, ui: { notify() {}, setWidget() {} },
+			sessionManager: { getSessionFile: () => join(root, "fresh.jsonl"), getSessionId: () => "fresh-session", getBranch: () => [] },
+		} as any;
+		await controller.sessionStart({ reason: "new" }, context);
+		const generationFiles = await import("node:fs/promises").then(({ readdir }) => readdir(paths.generations).catch(() => []));
+		assert.deepEqual(generationFiles, []);
+		assert.equal((await loadState(paths, "fresh-session")).existed, false);
+		await controller.beforeAgentStart(context, "SYSTEM");
+		assert.equal((await loadState(paths, "fresh-session")).existed, true);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a corrected model configuration clears stale missing-model warnings before prompt injection", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-model-warning-"));
+	try {
+		const controller = configuredController();
+		controller.paths = getSessionPaths(root, "session");
+		controller.state.warnings = [
+			{ code: "missing-model", message: "Configured examiner model \"old/missing\" is unavailable." },
+			{ code: "missing-consolidator-model", message: "Configured consolidator model \"old/missing\" is unavailable." },
+		];
+		await saveState(controller.paths, controller.state);
+		const notices: string[] = [];
+		await controller.beforeAgentStart({
+			model: { provider: "synthetic", id: "current" }, modelRegistry: { getAvailable: () => [] },
+			ui: { notify(message: string) { notices.push(message); } }, sessionManager: { getBranch: () => [] },
+		} as any, "SYSTEM");
+		assert.deepEqual(controller.state.warnings, []);
+		assert.deepEqual(JSON.parse(await readFile(controller.paths.state, "utf8")).warnings, []);
+		assert.deepEqual(notices, []);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("model-warning reconciliation fails open when the registry is unavailable", async () => {
+	const controller = configuredController();
+	controller.loadedConfig.config.model = "configured/model";
+	controller.state.warnings = [{ code: "missing-model", message: "Configured examiner model \"configured/model\" is unavailable." }];
+	const notices: string[] = [];
+	const system = await controller.beforeAgentStart({
+		model: { provider: "synthetic", id: "current" }, modelRegistry: { getAvailable() { throw new Error("registry offline"); } },
+		ui: { notify(message: string) { notices.push(message); } }, sessionManager: { getBranch: () => [] },
+	} as any, "SYSTEM");
+	assert.match(system, /SYSTEM/);
+	assert.equal(controller.state.warnings[0].code, "missing-model");
+	assert.match(notices.join("\n"), /configured\/model/);
+});
+
+test("a delegated agent marker disables refinement before a deferred ordinary baseline is published", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-delegated-child-"));
+	try {
+		const controller = configuredController();
+		controller.storageRoot = root;
+		let branch: any[] = [];
+		const context = {
+			mode: "print", cwd: root, ui: { notify() {}, setWidget() {} },
+			sessionManager: { getSessionFile: () => join(root, "child.jsonl"), getSessionId: () => "child-session", getBranch: () => branch },
+		} as any;
+		await controller.sessionStart({ reason: "new" }, context);
+		const paths = getSessionPaths(root, "child-session");
+		await assert.rejects(access(paths.state), /ENOENT/);
+		branch = [{ type: "custom", id: "marker", parentId: null, timestamp: "2026-01-01T00:00:00Z", customType: "pi-repl-agents-child", data: {} }];
+		assert.equal(await controller.beforeAgentStart(context, "SYSTEM"), "SYSTEM");
+		await assert.rejects(access(paths.root), /ENOENT/);
+		assert.equal(controller.active, false);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("an already-marked delegated session never loads or mutates refinement storage", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-existing-child-"));
+	try {
+		const controller = configuredController();
+		controller.storageRoot = root;
+		const context = {
+			mode: "print", cwd: root, ui: { notify() {}, setWidget() {} },
+			sessionManager: {
+				getSessionFile: () => join(root, "child.jsonl"), getSessionId: () => "child-session",
+				getBranch: () => [{ type: "custom", id: "marker", parentId: null, timestamp: "2026-01-01T00:00:00Z", customType: "pi-repl-agents-child", data: {} }],
+			},
+		} as any;
+		await controller.sessionStart({ reason: "resume" }, context);
+		assert.equal(controller.active, false);
+		assert.equal(await (await import("node:fs/promises")).stat(getSessionPaths(root, "child-session").root).then(() => true, () => false), false);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("shutdown removes only a newly created ordinary baseline that never reached a prompt", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-idle-cleanup-"));
+	try {
+		const controller = configuredController(); controller.storageRoot = root;
+		const context = { mode: "rpc", cwd: root, ui: { notify() {}, setWidget() {} }, sessionManager: { getSessionFile: () => join(root, "idle.jsonl"), getSessionId: () => "idle-session", getBranch: () => [] } } as any;
+		await controller.sessionStart({ reason: "new" }, context);
+		const paths = getSessionPaths(root, "idle-session"); await assert.rejects(access(paths.state), /ENOENT/);
+		await controller.shutdown();
+		await assert.rejects(access(paths.root), /ENOENT/);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("shutdown preserves a fresh fork baseline even before its first prompt", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-idle-fork-"));
+	try {
+		const parentFile = join(root, "parent.jsonl");
+		await import("../src/memory-file.ts").then(({ atomicWrite }) => atomicWrite(parentFile, JSON.stringify({ type: "session", id: "parent" }) + "\n"));
+		const controller = configuredController(); controller.storageRoot = root;
+		const branch = [{ type: "custom", id: "floor", parentId: null, timestamp: "2026-01-01T00:00:00Z", customType: "fixture", data: {} }];
+		const context = { mode: "rpc", cwd: root, ui: { notify() {}, setWidget() {} }, sessionManager: { getSessionFile: () => join(root, "fork.jsonl"), getSessionId: () => "fork-session", getBranch: () => branch } } as any;
+		await controller.sessionStart({ reason: "fork", previousSessionFile: parentFile }, context);
+		const paths = getSessionPaths(root, "fork-session"); await access(paths.state);
+		await controller.shutdown();
+		await access(paths.state);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a resumed empty v2 state without a baseline cursor examines from branch start", async () => {
+	const controller = configuredController();
+	controller.stateExisted = true;
+	controller.state.lastProcessedEntryId = undefined;
+	controller.injectedMemory = "";
+	let segment: any;
+	controller.runExamination = async (value: any, _trigger: string) => { segment = value; return { ok: true, attempts: 1, fallbackUsed: false }; };
+	const branch = [message("first", "first user turn"), message("second", "first assistant turn")];
+	await controller.handleFirstPrompt({ sessionManager: { getBranch: () => branch } } as any);
+	assert.equal(segment.fromEntryId, "first");
+	assert.equal(segment.throughEntryId, "second");
+});
+
+test("a late delegated marker removes fork bootstrap state created during child binding", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-delegated-fork-race-"));
+	try {
+		const parentFile = join(root, "parent.jsonl");
+		const childFile = join(root, "child.jsonl");
+		const { atomicWrite } = await import("../src/memory-file.ts");
+		await atomicWrite(parentFile, JSON.stringify({ type: "session", id: "parent" }) + "\n");
+		await atomicWrite(childFile, JSON.stringify({ type: "session", id: "child-session", parentSession: parentFile }) + "\n");
+		const controller = configuredController(); controller.storageRoot = root;
+		let branch: any[] = [{ type: "custom", id: "floor", parentId: null, timestamp: "2026-01-01T00:00:00Z", customType: "fixture", data: {} }];
+		const context = { mode: "print", cwd: root, ui: { notify() {}, setWidget() {} }, sessionManager: { getSessionFile: () => childFile, getSessionId: () => "child-session", getBranch: () => branch } } as any;
+		await controller.sessionStart({ reason: "startup" }, context);
+		const paths = getSessionPaths(root, "child-session"); await access(paths.state);
+		branch = [...branch, { type: "custom", id: "marker", parentId: "floor", timestamp: "2026-01-01T00:00:01Z", customType: "pi-repl-agents-child", data: {} }];
+		assert.equal(await controller.beforeAgentStart(context, "SYSTEM"), "SYSTEM");
+		await assert.rejects(access(paths.root), /ENOENT/);
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("shutdown catches an unprompted delegated child after its marker arrives", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-session-refinement-delegated-shutdown-"));
+	try {
+		const parentFile = join(root, "parent.jsonl"), childFile = join(root, "child.jsonl");
+		const { atomicWrite } = await import("../src/memory-file.ts");
+		await atomicWrite(parentFile, JSON.stringify({ type: "session", id: "parent" }) + "\n");
+		await atomicWrite(childFile, JSON.stringify({ type: "session", id: "child-session", parentSession: parentFile }) + "\n");
+		const controller = configuredController(); controller.storageRoot = root;
+		let branch: any[] = [{ type: "custom", id: "floor", parentId: null, timestamp: "2026-01-01T00:00:00Z", customType: "fixture", data: {} }];
+		const context = { mode: "print", cwd: root, ui: { notify() {}, setWidget() {} }, sessionManager: { getSessionFile: () => childFile, getSessionId: () => "child-session", getBranch: () => branch } } as any;
+		await controller.sessionStart({ reason: "startup" }, context);
+		const paths = getSessionPaths(root, "child-session"); await access(paths.state);
+		branch = [...branch, { type: "custom", id: "marker", parentId: "floor", timestamp: "2026-01-01T00:00:01Z", customType: "pi-repl-agents-child", data: {} }];
+		await controller.shutdown(context);
+		await assert.rejects(access(paths.root), /ENOENT/);
 	} finally { await rm(root, { recursive: true, force: true }); }
 });

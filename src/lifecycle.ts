@@ -9,7 +9,7 @@ import { activityBaseMessage, attemptMessage, RefinementActivity, shortModelName
 import { linkAbortSignals, waitForPromiseOrAbort } from "./abort.js";
 import { commitCandidatePublication } from "./checkpoint-commit.js";
 import { loadConfig, type LoadedConfig } from "./config.js";
-import { runConsolidator, runExaminer, type ExaminerCallbacks } from "./examiner.js";
+import { resolveConfiguredModel, runConsolidator, runExaminer, type ExaminerCallbacks } from "./examiner.js";
 import {
 	cleanupMemoryGenerations,
 	formatMemoryRecord,
@@ -93,6 +93,14 @@ export function memoryRecordsMatchBranch(state: SessionRefinementState, branch: 
 	return state.lastProcessedEntryId === undefined || positions.has(state.lastProcessedEntryId);
 }
 
+function isDelegatedAgentSession(branch: SessionEntry[]): boolean {
+	return branch.some((entry) => entry.type === "custom" && entry.customType === "pi-repl-agents-child");
+}
+
+function contextBranch(ctx: ExtensionContext): SessionEntry[] {
+	try { return ctx.sessionManager?.getBranch?.() ?? []; } catch { return []; }
+}
+
 function applyPublishedRecords(state: SessionRefinementState, memory: string, range?: { start: number; count: number }): void {
 	state.records = validateMemoryDocument(memory).map((entry) => entry.record);
 	if (state.fork && state.fork.inheritedRecordCount > 0 && range?.start === 0) {
@@ -116,6 +124,24 @@ function rootModel(ctx: ExtensionContext): Model<any> | undefined {
 
 const REBUILD_INSTRUCTION = "Inform the user that automatic session refinement is paused and ask them to run /session-refinement-rebuild. Continue helping with their current work; this warning does not disable Pi or context compaction.";
 
+interface ConsolidationCandidateOptions {
+	memory: string;
+	trigger: TriggerReason;
+	ctx: ExtensionContext;
+	paths: SessionPaths;
+	state: SessionRefinementState;
+	model: Model<any>;
+	activity: ActivityHandle;
+	base: string;
+	signal: AbortSignal;
+}
+
+interface ConsolidationCandidateOutcome {
+	memory: string;
+	range?: { start: number; count: number };
+	failure?: ExaminationResult;
+}
+
 export class RefinementController {
 	private readonly agentDir = process.env.PI_SESSION_REFINEMENT_AGENT_DIR?.trim() || getAgentDir();
 	private readonly storageRoot = process.env.PI_SESSION_REFINEMENT_ROOT?.trim() || this.agentDir;
@@ -137,6 +163,8 @@ export class RefinementController {
 	private firstPrompt = true;
 	private startReason = "startup";
 	private stateExisted = false;
+	private forkStatePublishedThisStart = false;
+	private deferredBaselineThisStart = false;
 	private contextCompactionRequested = false;
 	private operationGeneration = 0;
 	private deferredCheckpointUpdates: string[] = [];
@@ -170,6 +198,8 @@ export class RefinementController {
 		this.foregroundAbort = undefined;
 		this.firstPrompt = true;
 		this.stateExisted = false;
+		this.forkStatePublishedThisStart = false;
+		this.deferredBaselineThisStart = false;
 		this.contextCompactionRequested = false;
 		this.deferredCheckpointUpdates = [];
 		this.continuationCheckpointUpdates = [];
@@ -178,6 +208,7 @@ export class RefinementController {
 		this.sessionId = ctx.sessionManager.getSessionId();
 		this.active = Boolean(sessionFile && this.sessionId);
 		if (!this.active || !this.sessionId) return;
+		if (isDelegatedAgentSession(contextBranch(ctx))) { this.active = false; return; }
 		this.loadedConfig = await loadConfig(this.storageRoot);
 		if (ownership !== this.operationGeneration) return;
 		if (!this.loadedConfig.config.enabled) { this.active = false; return; }
@@ -196,6 +227,7 @@ export class RefinementController {
 					branchEntries: ctx.sessionManager.getBranch(),
 				});
 				if (ownership !== this.operationGeneration) return;
+				this.forkStatePublishedThisStart = true;
 				this.startReason = "fork";
 				this.injectedMemory = inherited.memory;
 				this.stateExisted = true;
@@ -213,6 +245,7 @@ export class RefinementController {
 				return;
 			}
 			if (!loaded.existed) {
+				await cleanupMemoryGenerations(this.paths).catch(() => undefined);
 				const branch = ctx.sessionManager.getBranch();
 				const historical = branch.some((entry) => entry.type === "message") && event.reason !== "new";
 				const legacyMemory = await readMemory(this.paths.memory);
@@ -226,9 +259,9 @@ export class RefinementController {
 				}
 				this.state = loaded.state as SessionRefinementState;
 				this.state.lastAttemptAt = new Date().toISOString();
+				this.deferredBaselineThisStart = true;
 				const baseline = initialSessionBaseline(branch);
 				if (baseline) this.state.lastProcessedEntryId = baseline;
-				await saveState(this.paths, this.state);
 				return;
 			}
 			this.state = loaded.state as SessionRefinementState;
@@ -246,6 +279,40 @@ export class RefinementController {
 				message: error instanceof Error ? error.message : String(error),
 				rootInstruction: REBUILD_INSTRUCTION,
 			};
+		}
+	}
+
+	private async reconcileConfiguredModelWarnings(ctx: ExtensionContext): Promise<void> {
+		if (!this.state || !this.paths || !this.loadedConfig) return;
+		const current = rootModel(ctx);
+		const pairs: Array<{ code: "missing-model" | "missing-consolidator-model"; reference: string }> = [
+			{ code: "missing-model", reference: this.loadedConfig.config.model },
+			{ code: "missing-consolidator-model", reference: this.loadedConfig.config.consolidator.model },
+		];
+		let changed = false;
+		for (const pair of pairs) {
+			const warning = this.state.warnings.find((entry) => entry.code === pair.code);
+			if (!warning) continue;
+			let available = false;
+			try {
+				available = Boolean(current && (pair.reference === "current"
+					|| pair.reference === `${current.provider}/${current.id}`
+					|| resolveConfiguredModel(pair.reference, ctx.modelRegistry)));
+			} catch { continue; }
+			if (available) {
+				clearWarning(this.state, pair.code);
+				changed = true;
+			} else if (!warning.message.includes(`"${pair.reference}"`)) {
+				setWarning(this.state, {
+					code: pair.code,
+					message: `Configured ${pair.code === "missing-model" ? "examiner" : "consolidator"} model "${pair.reference}" is unavailable; using the interactive session model as fallback.`,
+				});
+				changed = true;
+			}
+		}
+		if (changed) {
+			try { await saveState(this.paths, this.state); }
+			catch { try { ctx.ui.notify("[Session Refinement] Corrected model warning could not be persisted; refinement remains usable.", "warning"); } catch { /* disposed UI */ } }
 		}
 	}
 
@@ -274,11 +341,26 @@ export class RefinementController {
 
 	async beforeAgentStart(ctx: ExtensionContext, systemPrompt: string): Promise<string> {
 		if (!this.active || !this.paths || !this.loadedConfig) return systemPrompt;
+		if (isDelegatedAgentSession(contextBranch(ctx))) {
+			this.active = false;
+			this.activity.clearAll();
+			this.abortController.abort();
+			if (this.forkStatePublishedThisStart) await rm(this.paths.root, { recursive: true, force: true }).catch(() => undefined);
+			this.state = undefined;
+			this.legacyState = undefined;
+			this.injectedMemory = "";
+			return systemPrompt;
+		}
 		if (this.foregroundRun) await this.foregroundRun;
 		if (this.firstPrompt) {
 			this.firstPrompt = false;
 			await this.handleFirstPrompt(ctx);
 		}
+		if (this.deferredBaselineThisStart && this.state && this.paths) {
+			await saveState(this.paths, this.state);
+			this.deferredBaselineThisStart = false;
+		}
+		await this.reconcileConfiguredModelWarnings(ctx);
 		const warnings = this.warnings();
 		notifyPersistentWarnings(ctx, warnings, this.loadedConfig.issues);
 		let result = systemPrompt;
@@ -310,7 +392,7 @@ export class RefinementController {
 			await this.markBroken(new Error("Memory source cursors do not match the active session branch."));
 			return;
 		}
-		if (!this.state.lastProcessedEntryId || (!this.injectedMemory && !this.stateExisted)) return;
+		if (!this.state.lastProcessedEntryId && !this.stateExisted) return;
 		try {
 			const segment = buildTranscriptSegment({ branchEntries: ctx.sessionManager.getBranch(), lastProcessedEntryId: this.state.lastProcessedEntryId });
 			if (segment) await this.runExamination(segment, this.startReason === "fork" ? "fork" : "resume", ctx, true);
@@ -556,6 +638,7 @@ export class RefinementController {
 				this.legacyState = undefined;
 				this.injectedMemory = rebuiltMemory;
 				this.stateExisted = true;
+				this.deferredBaselineThisStart = false;
 				this.broken = false;
 				this.readOnlyWarning = undefined;
 			}
@@ -571,7 +654,8 @@ export class RefinementController {
 		}
 	}
 
-	async shutdown(): Promise<void> {
+	async shutdown(ctx?: ExtensionContext): Promise<void> {
+		const delegated = Boolean(ctx && isDelegatedAgentSession(contextBranch(ctx)));
 		this.activity.clearAll();
 		this.foregroundAbort?.abort();
 		if (this.foregroundRun) { try { await this.foregroundRun; } catch { /* reported by rebuild */ } }
@@ -579,6 +663,18 @@ export class RefinementController {
 		if (!drainBackground) this.abortController.abort();
 		if (this.currentRun) { try { await this.currentRun; } catch { /* fail-open */ } }
 		if (drainBackground) this.abortController.abort();
+		if (delegated) {
+			this.active = false;
+			if (this.forkStatePublishedThisStart && this.paths) await rm(this.paths.root, { recursive: true, force: true }).catch(() => undefined);
+			this.state = undefined;
+			this.legacyState = undefined;
+			return;
+		}
+		if (this.deferredBaselineThisStart && this.firstPrompt && this.paths) {
+			await rm(this.paths.root, { recursive: true, force: true }).catch(() => undefined);
+			this.state = undefined;
+			return;
+		}
 		if (this.state && this.paths && !this.broken) { try { await saveState(this.paths, this.state); } catch { /* preserve shutdown */ } }
 	}
 
@@ -621,17 +717,24 @@ export class RefinementController {
 		};
 	}
 
-	private async consolidateCandidate(options: {
-		memory: string;
-		trigger: TriggerReason;
-		ctx: ExtensionContext;
-		paths: SessionPaths;
-		state: SessionRefinementState;
-		model: Model<any>;
-		activity: ActivityHandle;
-		base: string;
-		signal: AbortSignal;
-	}): Promise<{ memory: string; range?: { start: number; count: number }; failure?: ExaminationResult }> {
+	private async consolidateCandidate(options: ConsolidationCandidateOptions): Promise<ConsolidationCandidateOutcome> {
+		try {
+			return await this.consolidateCandidateUnchecked(options);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			const failure: ExaminationResult = {
+				ok: false,
+				cancelled: options.signal.aborted || undefined,
+				attempts: 0,
+				fallbackUsed: false,
+				error: options.signal.aborted ? "Memory consolidation cancelled." : detail,
+			};
+			if (!options.signal.aborted) await this.pauseForConsolidationFailure(options.state, options.paths, detail, options.ctx);
+			return { memory: options.memory, failure };
+		}
+	}
+
+	private async consolidateCandidateUnchecked(options: ConsolidationCandidateOptions): Promise<ConsolidationCandidateOutcome> {
 		if (!this.loadedConfig || !this.sessionId || !needsConsolidation(options.memory, this.loadedConfig.config.memoryBudgetTokens)) {
 			return { memory: options.memory };
 		}
@@ -809,16 +912,18 @@ export class RefinementController {
 			message: `Memory consolidation failed: ${detail} Run /session-refinement-rebuild before automatic refinement resumes.`,
 			rootInstruction: REBUILD_INSTRUCTION,
 		});
-		await saveState(paths, state);
+		let persistenceError: unknown;
+		try { await saveState(paths, state); } catch (error) { persistenceError = error; }
 		if (paths !== this.paths && this.state && this.paths) {
 			setWarning(this.state, {
 				code: "consolidation-failed",
 				message: `Rebuild staging could not consolidate memory: ${detail} Run /session-refinement-rebuild to retry.`,
 				rootInstruction: REBUILD_INSTRUCTION,
 			});
-			await saveState(this.paths, this.state);
+			try { await saveState(this.paths, this.state); } catch (error) { persistenceError ??= error; }
 		}
-		ctx.ui.notify("[Session Refinement] Automatic refinement paused for this session. Run /session-refinement-rebuild.", "warning");
+		const persistenceNote = persistenceError ? " The warning could not be persisted; avoid restarting before rebuilding." : "";
+		try { ctx.ui.notify(`[Session Refinement] Automatic refinement paused for this session. Run /session-refinement-rebuild.${persistenceNote}`, "warning"); } catch { /* disposed UI */ }
 	}
 
 	private async markBroken(error: unknown): Promise<void> {

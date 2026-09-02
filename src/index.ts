@@ -46,6 +46,6 @@ export default function sessionRefinement(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		try { await controller.shutdown(); } catch (error) { warn(ctx, error); }
+		try { await controller.shutdown(ctx); } catch (error) { warn(ctx, error); }
 	});
 }

@@ -2,7 +2,7 @@
 
 ## Boundary
 
-Pi Session Refinement runs only in a persistent interactive root session. A session without a session file is ignored, which excludes spawned in-memory children and `--no-session` runs.
+Pi Session Refinement runs only in a persistent interactive root session. A session without a session file is ignored. Persistent delegated-agent sessions are excluded by their `pi-repl-agents-child` marker: an existing child store is left untouched and disabled, while state created during the marker's startup race is removed before the child's first provider call. A newly created ordinary baseline stays in memory until the first `before_agent_start`, so an idle or command-only process publishes no refinement state at all. Fork baselines are retained immediately because they carry inherited continuity.
 
 Refinement and consolidation each run in a separate isolated `AgentSession`. Those sessions load no extensions, context files, skills, prompt templates, themes, or general coding tools. The examiner receives the current rendered memory and one new transcript interval. The consolidator receives only the selected oldest record prefix. It cannot see the retained suffix.
 
@@ -20,7 +20,7 @@ Refinement and consolidation each run in a separate isolated `AgentSession`. Tho
 
 The examiner's `append_memory` tool submits a candidate to trusted host code; it does not write files. The host adds v2 metadata and renders the full candidate in memory.
 
-Below the rolling threshold, the host can publish the staged memory directly. At or above 80%, it considers only contiguous whole-record ranges that can reach the mandatory 60% headroom target. It measures each range as actually materialized, prefers feasible selected mass closest to 50% of budget, and subtracts exact retained-memory, header, heading, and metadata costs before telling the consolidator its body allowance. On forks, a range may be wholly inherited or wholly local but may not cross the immutable boundary. The host then validates actual final size, compression, chronology, and byte-exact retained material.
+Below the rolling threshold, the host can publish the staged memory directly. At or above 80%, it considers only contiguous whole-record ranges that can reach the mandatory 60% headroom target. It measures each range as actually materialized, prefers feasible selected mass closest to 50% of budget, and subtracts exact retained-memory, header, heading, and metadata costs before telling the consolidator its body allowance. A range is not feasible when it leaves only a token or two for the replacement: the host reserves 25% of the post-roll window for useful consolidation prose, capped at 256 tokens, and selects the nearest legal range that meets that floor. On forks, a range may be wholly inherited or wholly local but may not cross the immutable boundary. The host then validates actual final size, compression, chronology, and byte-exact retained material.
 
 Publication writes a unique immutable generation, fsyncs it, and then atomically writes `state.json` with the generation path and SHA-256. A process failure before the state rename leaves the old pointer and cursor authoritative. The failed generation is removed best-effort; after success, every generation except the active one is removed best-effort. These files are transaction machinery, not rollback history.
 

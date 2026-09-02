@@ -34,6 +34,9 @@ export function sha256(text: string): string {
 }
 
 export function getSessionPaths(agentDir: string, sessionId: string): SessionPaths {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId) || sessionId === "." || sessionId === "..") {
+		throw new Error("Invalid session identifier for refinement storage.");
+	}
 	const root = join(agentDir, "pi-session-refinement", "sessions", sessionId);
 	return { root, memory: join(root, "memory.md"), generations: join(root, "generations"), state: join(root, "state.json") };
 }

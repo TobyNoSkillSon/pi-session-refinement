@@ -127,3 +127,27 @@ test("startup fork detection reads only the session header parent path", async (
 		assert.equal(await readParentSessionFromFile(file), "/tmp/parent.jsonl");
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("fork inheritance refuses a record whose source start is not on the selected branch", async () => {
+	const agentDir = await mkdtemp(join(tmpdir(), "pi-session-refinement-fork-source-span-"));
+	try {
+		const parentSessionFile = await parentFixture(agentDir);
+		const inherited = await inheritForkMemory({
+			agentDir, newSessionId: "fork-session", previousSessionFile: parentSessionFile,
+			branchEntries: [message("shared"), message("fork-point")],
+		});
+		// The first fixture record has no fromEntryId and remains valid. Now make a parent whose first record spans a missing start.
+		assert.equal(inherited.inherited, 1);
+		const parent = getSessionPaths(agentDir, "span-parent");
+		const record = createCheckpointRecord({ fromEntryId: "missing-start", throughEntryId: "shared", createdAt: "2026-01-01T00:00:00Z", trigger: "time" });
+		const memory = appendRecordToMemory("", "must not inherit", record);
+		const state = createInitialState("span-parent");
+		state.records = [record]; state.lastProcessedEntryId = "shared"; state.memoryGeneration = await writeMemoryGeneration(parent, memory);
+		await saveState(parent, state);
+		const file = join(agentDir, "span-parent.jsonl");
+		await atomicWrite(file, JSON.stringify({ type: "session", id: "span-parent" }) + "\n");
+		const rejected = await inheritForkMemory({ agentDir, newSessionId: "span-child", previousSessionFile: file, branchEntries: [message("shared"), message("floor")] });
+		assert.equal(rejected.inherited, 0);
+		assert.equal(rejected.memory, "");
+	} finally { await rm(agentDir, { recursive: true, force: true }); }
+});

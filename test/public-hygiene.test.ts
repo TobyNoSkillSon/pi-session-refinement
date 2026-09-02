@@ -65,3 +65,8 @@ test("model policies are public, provider-neutral, and use single-purpose submis
 	assert.match(consolidator, /silently run a final consistency and deletion check/);
 	assert.match(consolidator, /`replace_memory_prefix`/);
 });
+
+test("package runtime floor matches the supported Pi peer", async () => {
+	const packageJson = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8"));
+	assert.equal(packageJson.engines.node, ">=22.19.0");
+});

@@ -198,7 +198,9 @@ export async function inheritForkMemory(options: {
 		if (!parentMemory) return noInheritance();
 		const parsed = validateLegacyMemory(parentMemory, loaded.state);
 		let inherited = 0;
-		while (inherited < parsed.length && branchIds.has(parsed[inherited].record.throughEntryId)) inherited++;
+		while (inherited < parsed.length
+			&& branchIds.has(parsed[inherited].record.throughEntryId)
+			&& (parsed[inherited].record.fromEntryId === undefined || branchIds.has(parsed[inherited].record.fromEntryId!))) inherited++;
 		if (inherited === 0) return noInheritance();
 		const selected = parsed.slice(0, inherited);
 		const memory = materializeLegacyPrefix(selected);
@@ -225,7 +227,9 @@ export async function inheritForkMemory(options: {
 		throw new BrokenStateError(`Parent v2 memory does not match state for session ${parentId}.`);
 	}
 	let inherited = 0;
-	while (inherited < parsed.length && branchIds.has(parsed[inherited].record.throughEntryId)) inherited++;
+	while (inherited < parsed.length
+		&& branchIds.has(parsed[inherited].record.throughEntryId)
+		&& (parsed[inherited].record.fromEntryId === undefined || branchIds.has(parsed[inherited].record.fromEntryId!))) inherited++;
 	const selected = parsed.slice(0, inherited);
 	const memory = materializeMemoryFromRecords(selected);
 	const state = createInitialState(options.newSessionId);

@@ -12,6 +12,10 @@
 - Remove overflow side files and their warning policy.
 - Keep immediate post-compaction append updates while withholding prefix replacements until a fresh prompt.
 - Strengthen public checks against private paths, model configuration, credentials, and session material.
+- Reject mathematically feasible but unusable consolidation ranges, persist no-range failures as rebuild-required pauses, clean crash-orphaned generations on startup, and reconcile stale missing-model warnings after configuration repair.
+- Confine session identifiers and inherited source spans before reading or publishing fork memory.
+- Detect persistent delegated-agent markers explicitly so inherited profile extensions cannot create or update child refinement stores, and defer ordinary baseline publication until the first prompt instead of leaking empty state directories from idle processes.
+- Align the declared Node.js floor with Pi 0.83's actual requirement: Node 22.19 or newer.
 
 ## 0.1.0
 
