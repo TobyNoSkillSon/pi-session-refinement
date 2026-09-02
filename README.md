@@ -4,7 +4,7 @@ Pi Session Refinement keeps a durable memory beside each saved Pi conversation. 
 
 The extension does not replace Pi's transcript or compaction summary. Raw session JSONL remains the source of truth. Refinement memory is a smaller continuation aid that Pi loads into later prompts.
 
-![How v2 checkpoints, consolidates, and publishes session memory](docs/session-flow.svg)
+![How v2 checkpoints, consolidates, and publishes session memory](docs/session-flow.svg?v=2)
 
 ## Why it exists
 
