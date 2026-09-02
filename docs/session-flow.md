@@ -1,19 +1,15 @@
 # Session flow
 
-The README diagram follows one session from top to bottom. [`session-flow.mmd`](session-flow.mmd) is the Mermaid source; [`session-flow.svg`](session-flow.svg) is the styled GitHub asset.
+The README diagram follows time down the left column. When memory reaches 80%, the path moves right once and continues downward through consolidation.
 
-## Reading the timeline
+[`session-flow.mmd`](session-flow.mmd) is the Mermaid source. [`session-flow.svg`](session-flow.svg) is the styled GitHub asset.
 
-1. Conversation accumulates in Pi's raw session JSONL.
-2. The examiner turns the unprocessed interval into one checkpoint.
-3. The host publishes the new checkpoint memory. A later safe prompt boundary loads it.
-4. A later interval creates another checkpoint while the staged memory keeps chronological order.
-5. When a staged candidate reaches 80% of the configured memory budget, the host chooses the oldest checkpoints it can safely replace together.
-6. The consolidator rewrites only those selected old checkpoints. Recent checkpoints remain byte-exact.
-7. The next safe prompt uses one consolidated base followed by the exact recent checkpoints. The sequence repeats as the session grows.
+## Timeline
 
-Raw JSONL remains complete throughout. It is the rebuild source when derived memory must be recreated.
+1. Conversation creates checkpoint 1.
+2. More conversation creates checkpoint 2 and a new staged checkpoint.
+3. At 80%, the host selects the oldest replaceable checkpoints.
+4. The consolidator turns that old prefix into one compact record.
+5. The recent checkpoint stays exact, and later checkpoints append after it.
 
-## Details omitted from the picture
-
-The image leaves transaction mechanics, model fallback, fork boundaries, and the immediate post-compaction update out of the main path. Those rules still apply and are covered in [architecture](architecture.md) and [session lifecycle](lifecycle.md).
+Raw session JSONL remains complete and can rebuild derived memory. Transaction mechanics, model fallback, fork boundaries, and post-compaction activation are documented in [architecture](architecture.md) and [session lifecycle](lifecycle.md).

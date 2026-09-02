@@ -1,19 +1,13 @@
 flowchart TD
-    conversation[1. Conversation grows<br/>Raw JSONL records every turn]
-    checkpoint[2. Create a checkpoint<br/>The examiner turns only the new interval into a checkpoint]
-    publish[3. Publish the new memory<br/>The next safe prompt loads it]
-    continue[4. A later interval creates checkpoint 4<br/>The staged memory keeps chronological order]
-    threshold[5. Memory reaches 80%<br/>Select the oldest legal whole-record prefix]
-    consolidate[6. Consolidate the old prefix<br/>Keep recent checkpoints exact]
-    rolled[7. Continue with rolled memory<br/>Consolidated base + exact recent checkpoints]
-    canonical[(Raw session JSONL remains complete)]
+    conversation[Conversation]
+    checkpoint1[Checkpoint 1]
+    more[More conversation]
+    checkpoint2[Checkpoint 2]
+    threshold[Memory reaches 80%]
+    select[Select checkpoint 1 + checkpoint 2]
+    consolidate[Replace them with one compact record]
+    rolled[Rolled memory: consolidated past + exact recent checkpoint]
+    continue[Continue appending new checkpoints]
 
-    conversation --> checkpoint
-    checkpoint --> publish
-    publish --> continue
-    continue --> threshold
-    threshold --> consolidate
-    consolidate --> rolled
-    rolled -. later conversation repeats the sequence .-> continue
-    conversation -. canonical history .-> canonical
-    rolled -. rebuild source remains available .-> canonical
+    conversation --> checkpoint1 --> more --> checkpoint2 --> threshold
+    threshold --> select --> consolidate --> rolled --> continue

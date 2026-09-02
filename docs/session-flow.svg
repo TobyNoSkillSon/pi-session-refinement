@@ -1,100 +1,84 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="760" height="900" viewBox="0 0 760 900" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision" text-rendering="optimizeLegibility">
-  <title id="title">Pi Session Refinement v2 in chronological order</title>
-  <desc id="desc">A vertical timeline shows conversation growth, checkpoint creation, publication, the eighty percent threshold, consolidation of the oldest records, and continued use of rolled memory.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="720" viewBox="0 0 760 720" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision" text-rendering="optimizeLegibility">
+  <title id="title">Pi Session Refinement v2 chronological memory roll</title>
+  <desc id="desc">A restrained two-column timeline runs down the left as checkpoints accumulate, moves right when memory reaches eighty percent, then continues down through consolidation and rolled memory.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#8b949e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M1 1 L9 5 L1 9" fill="none" stroke="#8b949e" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
     <style>
       text { fill:#f0f6fc; font-family:Arial, Helvetica, sans-serif; }
-      .time { font-size:10.5px; font-weight:700; letter-spacing:1.4px; fill:#8b949e; }
-      .step { font-size:12px; font-weight:700; letter-spacing:.35px; }
-      .body { font-size:11.5px; fill:#c9d1d9; }
-      .small { font-size:10px; fill:#8b949e; }
+      .lane { font-size:10.5px; font-weight:700; letter-spacing:1.4px; fill:#8b949e; }
+      .label { font-size:12px; font-weight:700; }
+      .body { font-size:11px; fill:#c9d1d9; }
+      .small { font-size:9.5px; fill:#8b949e; }
       .mono { font-family:"SFMono-Regular", Menlo, Consolas, monospace; }
-      .card { fill:#161b22; stroke:#8b949e; stroke-width:1.4; }
-      .blue { fill:#182331; stroke:#58a6ff; stroke-width:1.5; }
-      .amber { fill:#282319; stroke:#d29922; stroke-width:1.5; }
-      .green { fill:#18251f; stroke:#3fb950; stroke-width:1.5; }
-      .pill { fill:#21262d; stroke:#6e7681; stroke-width:1; }
-      .checkpoint { fill:#1f2b3a; stroke:#58a6ff; stroke-width:1; }
-      .selected { fill:#302819; stroke:#d29922; stroke-width:1; }
-      .consolidated { fill:#1b2d22; stroke:#3fb950; stroke-width:1; }
-      .flow { fill:none; stroke:#8b949e; stroke-width:1.5; stroke-linecap:round; marker-end:url(#arrow); }
+      .line { fill:none; stroke:#8b949e; stroke-width:1.5; stroke-linecap:round; }
+      .flow { fill:none; stroke:#8b949e; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; marker-end:url(#arrow); }
+      .card { fill:#161b22; stroke:#8b949e; stroke-width:1.3; }
+      .pill { fill:#1c2128; stroke:#6e7681; stroke-width:1; }
+      .strong { fill:#21262d; stroke:#c9d1d9; stroke-width:1.2; }
     </style>
   </defs>
 
-  <rect width="760" height="900" fill="#0d1117"/>
-  <text x="30" y="27" class="time">TIME</text>
-  <path d="M55 40 L55 842" class="flow"/>
+  <rect width="760" height="760" fill="#0d1117"/>
+  <text x="40" y="29" class="lane">CHECKPOINTS ACCUMULATE</text>
+  <path d="M60 48 L60 391" class="line"/>
 
-  <!-- 1 -->
-  <circle cx="55" cy="75" r="5" fill="#c9d1d9"/>
-  <rect x="90" y="42" width="630" height="72" rx="10" class="card"/>
-  <text x="110" y="67" class="step">1 · CONVERSATION GROWS</text>
-  <text x="110" y="90" class="body">User messages, Pi responses, and tool results accumulate in the saved session.</text>
-  <text x="110" y="106" class="small mono">raw JSONL records every turn</text>
+  <!-- Left column -->
+  <circle cx="60" cy="74" r="4" fill="#c9d1d9"/>
+  <text x="88" y="70" class="label">Conversation</text>
+  <rect x="88" y="81" width="116" height="10" rx="5" class="pill"/>
+  <rect x="88" y="98" width="174" height="12" rx="6" class="pill"/>
 
-  <!-- 2 -->
-  <circle cx="55" cy="175" r="5" fill="#58a6ff"/>
-  <rect x="90" y="134" width="630" height="100" rx="10" class="blue"/>
-  <text x="110" y="159" class="step">2 · CREATE A CHECKPOINT</text>
-  <text x="110" y="181" class="body">The examiner turns only the new conversation interval into one memory checkpoint.</text>
-  <rect x="110" y="196" width="118" height="24" rx="6" class="checkpoint"/>
-  <text x="169" y="212" text-anchor="middle" class="small">checkpoint 1</text>
-  <rect x="236" y="196" width="118" height="24" rx="6" class="checkpoint"/>
-  <text x="295" y="212" text-anchor="middle" class="small">checkpoint 2</text>
-  <rect x="362" y="196" width="136" height="24" rx="6" class="checkpoint"/>
-  <text x="430" y="212" text-anchor="middle" class="small">new checkpoint 3</text>
+  <circle cx="60" cy="151" r="4" fill="#c9d1d9"/>
+  <text x="88" y="147" class="label">Checkpoint 1</text>
+  <text x="88" y="165" class="small">new interval recorded</text>
 
-  <!-- 3 -->
-  <circle cx="55" cy="282" r="5" fill="#c9d1d9"/>
-  <rect x="90" y="254" width="630" height="72" rx="10" class="card"/>
-  <text x="110" y="279" class="step">3 · PUBLISH THE NEW MEMORY</text>
-  <text x="110" y="301" class="body">The new checkpoint history becomes the memory Pi will use next.</text>
-  <text x="110" y="317" class="small">The next safe prompt boundary loads it.</text>
+  <circle cx="60" cy="222" r="4" fill="#c9d1d9"/>
+  <text x="88" y="218" class="label">More conversation</text>
+  <rect x="88" y="229" width="142" height="10" rx="5" class="pill"/>
+  <rect x="88" y="246" width="190" height="12" rx="6" class="pill"/>
 
-  <!-- 4 -->
-  <circle cx="55" cy="382" r="5" fill="#c9d1d9"/>
-  <rect x="90" y="346" width="630" height="80" rx="10" class="card"/>
-  <text x="110" y="371" class="step">4 · THE SESSION CONTINUES</text>
-  <text x="110" y="393" class="body">A later interval creates checkpoint 4. The staged memory keeps the same order.</text>
-  <text x="110" y="411" class="small mono">checkpoint 1 · checkpoint 2 · checkpoint 3 · checkpoint 4</text>
+  <circle cx="60" cy="298" r="4" fill="#c9d1d9"/>
+  <text x="88" y="294" class="label">Checkpoint 2</text>
+  <text x="88" y="312" class="small">another interval recorded</text>
 
-  <!-- 5 -->
-  <circle cx="55" cy="495" r="5" fill="#d29922"/>
-  <rect x="90" y="448" width="630" height="112" rx="10" class="amber"/>
-  <text x="110" y="473" class="step">5 · MEMORY REACHES 80%</text>
-  <text x="110" y="495" class="body">The host chooses the oldest checkpoints it can safely replace together.</text>
-  <rect x="110" y="512" width="208" height="30" rx="6" class="selected"/>
-  <text x="214" y="531" text-anchor="middle" class="small">oldest prefix: checkpoints 1 + 2</text>
-  <rect x="328" y="512" width="246" height="30" rx="6" class="checkpoint"/>
-  <text x="451" y="531" text-anchor="middle" class="small">exact tail: checkpoints 3 + 4</text>
-  <text x="594" y="531" class="small">not selected</text>
+  <circle cx="60" cy="374" r="5" fill="#f0f6fc"/>
+  <rect x="88" y="337" width="260" height="76" rx="9" class="card"/>
+  <text x="106" y="361" class="label">Memory reaches 80%</text>
+  <rect x="106" y="375" width="64" height="24" rx="5" class="pill"/>
+  <text x="138" y="391" text-anchor="middle" class="small">checkpoint 1</text>
+  <rect x="178" y="375" width="64" height="24" rx="5" class="pill"/>
+  <text x="210" y="391" text-anchor="middle" class="small">checkpoint 2</text>
+  <rect x="250" y="375" width="80" height="24" rx="5" class="strong"/>
+  <text x="290" y="391" text-anchor="middle" class="small">new checkpoint</text>
 
-  <!-- 6 -->
-  <circle cx="55" cy="632" r="5" fill="#3fb950"/>
-  <rect x="90" y="584" width="630" height="120" rx="10" class="green"/>
-  <text x="110" y="609" class="step">6 · CONSOLIDATE THE OLD PREFIX</text>
-  <text x="110" y="631" class="body">The consolidator rewrites those old checkpoints as one compact current-state record.</text>
-  <rect x="110" y="650" width="220" height="34" rx="6" class="consolidated"/>
-  <text x="220" y="665" text-anchor="middle" class="small">consolidated checkpoints 1 + 2</text>
-  <text x="220" y="678" text-anchor="middle" class="small">one rolling base</text>
-  <rect x="340" y="650" width="166" height="34" rx="6" class="checkpoint"/>
-  <text x="423" y="671" text-anchor="middle" class="small">checkpoint 3 unchanged</text>
-  <rect x="516" y="650" width="166" height="34" rx="6" class="checkpoint"/>
-  <text x="599" y="671" text-anchor="middle" class="small">new checkpoint 4</text>
-  <text x="110" y="697" class="small mono">target: about 60% of the memory budget or less</text>
+  <!-- Move right once -->
+  <path d="M350 375 L390 375 C414 375, 430 389, 430 408" class="flow"/>
+  <text x="381" y="362" text-anchor="middle" class="small">roll</text>
 
-  <!-- 7 -->
-  <circle cx="55" cy="758" r="5" fill="#58a6ff"/>
-  <rect x="90" y="728" width="630" height="78" rx="10" class="blue"/>
-  <text x="110" y="753" class="step">7 · CONTINUE WITH ROLLED MEMORY</text>
-  <text x="110" y="775" class="body">The next safe prompt loads the consolidated base and exact recent checkpoints.</text>
-  <text x="110" y="793" class="small">The same sequence repeats as the conversation grows.</text>
+  <!-- Right column -->
+  <text x="420" y="340" class="lane">ROLL THE OLDEST MEMORY</text>
+  <path d="M430 414 L430 690" class="flow"/>
 
-  <!-- Canonical source -->
-  <rect x="90" y="830" width="630" height="44" rx="9" class="card"/>
-  <text x="110" y="856" class="step mono">RAW SESSION JSONL</text>
-  <text x="290" y="856" class="body">remains complete and is never rewritten</text>
+  <circle cx="430" cy="414" r="4" fill="#c9d1d9"/>
+  <text x="458" y="410" class="label">Select the old prefix</text>
+  <rect x="458" y="422" width="210" height="28" rx="6" class="strong"/>
+  <text x="563" y="440" text-anchor="middle" class="small">checkpoint 1 + checkpoint 2</text>
+
+  <circle cx="430" cy="492" r="4" fill="#c9d1d9"/>
+  <text x="458" y="488" class="label">Consolidate</text>
+  <text x="458" y="506" class="body">Replace those old checkpoints with one compact record.</text>
+
+  <circle cx="430" cy="568" r="4" fill="#c9d1d9"/>
+  <text x="458" y="564" class="label">Rolled memory</text>
+  <rect x="458" y="578" width="132" height="30" rx="6" class="strong"/>
+  <text x="524" y="597" text-anchor="middle" class="small">consolidated past</text>
+  <rect x="598" y="578" width="122" height="30" rx="6" class="pill"/>
+  <text x="659" y="597" text-anchor="middle" class="small">recent checkpoint</text>
+
+  <circle cx="430" cy="648" r="4" fill="#c9d1d9"/>
+  <text x="458" y="644" class="label">Continue</text>
+  <text x="458" y="662" class="body">New checkpoints append after the exact recent record.</text>
+
 </svg>
