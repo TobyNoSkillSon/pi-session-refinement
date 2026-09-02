@@ -1,32 +1,19 @@
-flowchart LR
-    transcript[(Raw session JSONL)]
-    tail[New conversation interval]
-    examiner[Isolated examiner]
-    candidate[Stage new checkpoint]
-    threshold{Candidate reaches 80%?}
-    select[Select oldest legal whole-record prefix]
-    consolidator[Isolated consolidator
-sees selected prefix only]
-    rolled[Rolled candidate
-consolidated base + exact suffix + new checkpoint]
-    direct[Candidate below threshold]
-    generation[Write and hash immutable generation]
-    pointer[Atomically publish state.json pointer]
-    full[Fresh prompt, resume, fork, compaction, or rebuild
-loads full generation]
-    overlay[Immediate post-compaction continuation
-gets exact new checkpoint only]
+flowchart TD
+    conversation[1. Conversation grows<br/>Raw JSONL records every turn]
+    checkpoint[2. Create a checkpoint<br/>The examiner turns only the new interval into a checkpoint]
+    publish[3. Publish the new memory<br/>The next safe prompt loads it]
+    continue[4. A later interval creates checkpoint 4<br/>The staged memory keeps chronological order]
+    threshold[5. Memory reaches 80%<br/>Select the oldest legal whole-record prefix]
+    consolidate[6. Consolidate the old prefix<br/>Keep recent checkpoints exact]
+    rolled[7. Continue with rolled memory<br/>Consolidated base + exact recent checkpoints]
+    canonical[(Raw session JSONL remains complete)]
 
-    transcript --> tail
-    tail --> examiner
-    examiner --> candidate
-    candidate --> threshold
-    threshold -- no --> direct
-    direct --> generation
-    threshold -- yes --> select
-    select --> consolidator
-    consolidator --> rolled
-    rolled --> generation
-    generation --> pointer
-    pointer --> full
-    pointer -. when Pi continues immediately .-> overlay
+    conversation --> checkpoint
+    checkpoint --> publish
+    publish --> continue
+    continue --> threshold
+    threshold --> consolidate
+    consolidate --> rolled
+    rolled -. later conversation repeats the sequence .-> continue
+    conversation -. canonical history .-> canonical
+    rolled -. rebuild source remains available .-> canonical

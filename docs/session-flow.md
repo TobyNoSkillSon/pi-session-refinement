@@ -1,31 +1,19 @@
 # Session flow
 
-The README diagram is a hand-styled rendering of [`session-flow.mmd`](session-flow.mmd). The Mermaid source defines the behavior; [`session-flow.svg`](session-flow.svg) is the GitHub-friendly visual asset.
+The README diagram follows one session from top to bottom. [`session-flow.mmd`](session-flow.mmd) is the Mermaid source; [`session-flow.svg`](session-flow.svg) is the styled GitHub asset.
 
-## Reading the diagram
+## Reading the timeline
 
-A new transcript interval enters an isolated examiner. The examiner submits prose through one tool, but trusted host code owns the source cursors, record metadata, size checks, and publication.
+1. Conversation accumulates in Pi's raw session JSONL.
+2. The examiner turns the unprocessed interval into one checkpoint.
+3. The host publishes the new checkpoint memory. A later safe prompt boundary loads it.
+4. A later interval creates another checkpoint while the staged memory keeps chronological order.
+5. When a staged candidate reaches 80% of the configured memory budget, the host chooses the oldest checkpoints it can safely replace together.
+6. The consolidator rewrites only those selected old checkpoints. Recent checkpoints remain byte-exact.
+7. The next safe prompt uses one consolidated base followed by the exact recent checkpoints. The sequence repeats as the session grows.
 
-Below the rolling threshold, the staged candidate can be published directly. At the threshold, the host selects an oldest legal whole-record prefix and sends only that prefix to the consolidator. The consolidator cannot see the exact suffix. Host code joins its replacement to that untouched suffix and validates the complete rolled candidate.
+Raw JSONL remains complete throughout. It is the rebuild source when derived memory must be recreated.
 
-Publication has two durable steps. The extension writes and hashes a unique generation first. It then atomically replaces `state.json` with a pointer to that generation. Only the generation named by valid state is authoritative.
+## Details omitted from the picture
 
-The next safe boundary loads the full generation. An immediate continuation after compaction receives only the exact new checkpoint as a temporary update because a lower-priority message cannot replace stale system-prompt memory safely.
-
-Raw session JSONL remains canonical throughout.
-
-## Required behavior
-
-- Background eligibility requires both elapsed time and root tool activity.
-- Pre-compaction refinement is awaited before Pi discards context.
-- The examiner receives current rendered memory and one chronological transcript interval.
-- The consolidator receives one selected old prefix and no retained suffix.
-- Selection uses rendered token mass, whole records, fork boundaries, and a practical output allowance.
-- A valid roll leaves memory at roughly 60% of budget or less.
-- Retained records remain byte-exact.
-- Generation publication precedes atomic state-pointer publication.
-- Prompt snapshots change only at established activation boundaries.
-- Model or storage failure leaves Pi usable and preserves raw history for rebuild.
-- v1 memory remains read-only until the active session is rebuilt explicitly.
-- Forks inherit only branch-valid active records and never replay parent JSONL automatically.
-- Spawned children and `--no-session` runs create no refinement memory.
+The image leaves transaction mechanics, model fallback, fork boundaries, and the immediate post-compaction update out of the main path. Those rules still apply and are covered in [architecture](architecture.md) and [session lifecycle](lifecycle.md).
