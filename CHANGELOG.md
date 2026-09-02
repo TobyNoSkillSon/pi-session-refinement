@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-09-02)
 
 - Introduce incompatible v2 state and memory records. Existing v1 sessions remain injected read-only until an explicit rebuild; no automatic migration runs.
 - Stage checkpoint publication and roll memory at the 80% threshold by consolidating an oldest whole-record prefix selected by rendered token mass.
@@ -16,6 +16,7 @@
 - Confine session identifiers and inherited source spans before reading or publishing fork memory.
 - Detect persistent delegated-agent markers explicitly so inherited profile extensions cannot create or update child refinement stores, and defer ordinary baseline publication until the first prompt instead of leaking empty state directories from idle processes.
 - Align the declared Node.js floor with Pi 0.83's actual requirement: Node 22.19 or newer.
+- Rewrite the public guide and session-flow diagram around v2 checkpointing, rolling consolidation, transactional publication, activation boundaries, and manual migration.
 
 ## 0.1.0
 

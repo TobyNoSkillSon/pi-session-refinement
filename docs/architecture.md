@@ -1,5 +1,7 @@
 # Architecture
 
+The [session-flow diagram](session-flow.md) shows the data path. This document covers the boundaries that keep it safe.
+
 ## Boundary
 
 Pi Session Refinement runs only in a persistent interactive root session. A session without a session file is ignored. Persistent delegated-agent sessions are excluded by their `pi-repl-agents-child` marker: an existing child store is left untouched and disabled, while state created during the marker's startup race is removed before the child's first provider call. A newly created ordinary baseline stays in memory until the first `before_agent_start`, so an idle or command-only process publishes no refinement state at all. Fork baselines are retained immediately because they carry inherited continuity.

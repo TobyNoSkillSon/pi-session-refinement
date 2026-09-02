@@ -22,6 +22,12 @@ ${PI_CODING_AGENT_DIR}/pi-session-refinement/config.json
 
 The time checkpoint requires both elapsed time and tool activity. The context trigger is independent and remains active when automatic refinement has paused after a consolidation failure.
 
+## Rolling thresholds
+
+The 80% roll trigger and 60% post-roll target are fixed v2 invariants, not configuration fields. `memoryBudgetTokens` sets the scale for both. Token measurement uses the extension's deterministic rendered-text estimate, so it should be treated as a memory budget rather than a provider billing count.
+
+Selection also reserves a practical allowance for consolidation prose. A mathematically valid range is rejected when metadata and retained memory leave too little room for useful continuity.
+
 ## Model fallback
 
 Each operation resolves its configured model independently. After `maxAttempts`, the extension tries the interactive session model when it is different and available. Missing configured models produce a warning. All retries are immediate; the internal SDK session adds no retry layer.

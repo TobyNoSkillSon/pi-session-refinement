@@ -1,44 +1,52 @@
 # Pi Session Refinement
 
-Pi Session Refinement gives each saved Pi conversation its own chronological memory. A refinement model turns new stretches of conversation into checkpoints. When memory grows, a separate consolidator replaces the oldest record prefix with a compact continuity checkpoint. Pi loads the latest memory after compaction or resume while ordinary turns keep the same prompt snapshot.
+Pi Session Refinement keeps a durable memory beside each saved Pi conversation. It turns completed stretches of a long session into chronological checkpoints, then rolls older checkpoints into a compact current-state record before memory becomes another context problem.
 
-The extension runs only in persistent interactive root sessions. Spawned children and `--no-session` runs do not create refinement memory.
+The extension does not replace Pi's transcript or compaction summary. Raw session JSONL remains the source of truth. Refinement memory is a smaller continuation aid that Pi loads into later prompts.
 
-## What happens during a session
+![How v2 checkpoints, consolidates, and publishes session memory](docs/session-flow.svg)
 
-A background checkpoint becomes eligible after both the time threshold and root tool-result threshold have been met. The refinement model reads the current memory and the unprocessed conversation interval, then submits one exact checkpoint candidate.
+## Why it exists
 
-The extension stages that candidate before touching active memory. If the candidate reaches 80% of `memoryBudgetTokens`, it evaluates legal whole-record ranges that can actually leave the complete memory at 60% of budget or less, then prefers selected rendered mass closest to half the budget. A fork range must stay wholly inherited or wholly local. The consolidator sees only that range and receives the exact remaining body allowance after retained memory and host metadata costs. The host still rejects malformed, non-compressing, or oversized output.
+Long Pi sessions eventually cross compaction boundaries. Pi can continue from its compaction summary, but a single summary must serve the immediate next turn. It is not designed to preserve every correction, decision, evidence limit, or unresolved thread accumulated across a project.
 
-Publication writes a new immutable memory generation first, then atomically replaces the state file that names and hashes it. The old state remains authoritative until that pointer commit; superseded and failed-attempt generations are removed best-effort.
+Session Refinement maintains that longer continuity separately. The examiner records what changed since the previous cursor. The consolidator later rewrites only the oldest eligible memory records, leaving newer checkpoints byte-for-byte intact.
 
-Memory can advance on disk while the current prompt keeps its previous snapshot. Pi activates the new snapshot after compaction, resume, fork bootstrap, or a successful rebuild. If Pi continues the same run immediately after compaction, the extension supplies the exact new checkpoint as an additive update on every model call until the next fresh prompt. This remains safe when disk memory was consolidated: the consolidation body is never sent as a lower-priority replacement for the stale system-prompt memory.
+## How v2 works
 
-![Pi Session Refinement across two compaction cycles](docs/session-flow.svg)
+### Checkpoint
 
-[View the behavior checklist](docs/session-flow-ascii.md).
+After enough time and root tool activity, or before context compaction, an isolated examiner receives the current memory and one unprocessed transcript interval. It submits a checkpoint candidate. Host code adds source cursors and validates the complete staged memory before anything is published.
 
-## Features
+### Roll
 
-- v2 rolling memory for each persistent root session
-- Separate configurable refinement and consolidation models, resolved through Pi's model registry
-- Background work gated by elapsed time and root tool activity
-- Early context compaction after refinement has had a chance to save material leaving context
-- Stable prompt snapshots plus the existing immediate post-compaction append bridge
-- Crash-atomic generation publication with deterministic token and headroom checks
-- Deliberately cheap fork inheritance with an immutable rebuild floor
-- Manual reconstruction through `/session-refinement-rebuild`
-- Non-modal animated progress above the editor
-- Immediate retries and fallback to the current session model
-- Usage records kept outside model context
+When the staged candidate reaches 80% of `memoryBudgetTokens`, the host selects an oldest legal whole-record range. A separate isolated consolidator sees only that range. It produces one continuity record at the range cutoff; it never sees or rewrites the retained suffix.
 
-## Use it
+The finished memory must fit at roughly 60% of the configured budget or less. Empty, malformed, non-compressing, or oversized output is rejected.
+
+### Publish and activate
+
+The extension writes and hashes a new immutable generation, then atomically updates `state.json` to point at it. A crash before the pointer update leaves the old generation authoritative. Failed and superseded generations are cleanup residue, not a history archive.
+
+A background checkpoint does not mutate the prompt already in flight. The full new generation becomes active at the next fresh prompt, resume, fork bootstrap, compaction, or rebuild. If Pi continues immediately after compaction, only the exact new checkpoint is supplied as a temporary additive update. A consolidation replacement never masquerades as an append to stale system memory.
+
+[Read the diagram notes and behavior checklist](docs/session-flow.md).
+
+## Where it runs
+
+The extension runs in saved, interactive root sessions. It does not activate in spawned children, `--no-session` processes, or idle sessions that never submit a prompt.
+
+It adds no model-facing memory tool to the root conversation. Refinement and consolidation happen in isolated SDK sessions with one submission tool each.
+
+## Add it to Pi
 
 Give this repository URL to your coding agent:
 
 `https://github.com/TobyNoSkillSon/pi-session-refinement`
 
-Tell it you want Pi Session Refinement. It can inspect your Pi setup and install the package.
+Ask it to inspect your Pi profile, add the package, and keep runtime configuration outside the repository. The public package does not choose a model provider.
+
+Pi Session Refinement v2 requires Node.js 22.19 or newer and Pi `>=0.83.0 <1.0.0`.
 
 ## Configuration
 
@@ -70,7 +78,33 @@ All fields are optional:
 }
 ```
 
-Both model fields accept `current`, an exact `provider/model-id`, or a unique available bare model ID. The package does not choose a provider. See [configuration](docs/configuration.md) for details.
+Both model fields accept `current`, an exact `provider/model-id`, or a unique available bare model ID. See [configuration](docs/configuration.md) for field behavior and fallback rules.
+
+## Upgrading v1 sessions
+
+v2 never migrates old sessions in the background. Valid v1 memory remains injected read-only so the session can continue without surprise model calls or state changes.
+
+Run the only maintenance command when you want to convert the active session:
+
+```text
+/session-refinement-rebuild
+```
+
+A rebuild reads the authorized branch in chronological segments and stages the complete v2 result separately. Root sessions start at branch beginning. Forks preserve their inherited baseline and rebuild only after the immutable fork floor. Active memory changes only after every segment succeeds. Escape cancels without replacing the old memory.
+
+The same command can create memory for a historical session that has none.
+
+## Fork behavior
+
+A fork inherits only the active v2 record prefix whose source cursors exist at the selected fork point. It records that point as an immutable floor and processes new child history after it. The child never replays parent JSONL automatically.
+
+A fork created before the parent's rolling base may inherit little or no memory. That trade keeps forks cheap and prevents hidden parent-history reconstruction.
+
+## Failure and recovery
+
+Refinement is fail-open. A failed examiner leaves the transcript cursor unchanged, so raw JSONL can regenerate the interval. The configured model is tried up to `maxAttempts`; the current interactive model is used as fallback when it is different and available.
+
+If consolidation cannot produce valid headroom, automatic memory writes pause for that session and Pi asks for `/session-refinement-rebuild`. Conversation and context compaction remain usable. Corrupt or inconsistent state follows the same rebuild path.
 
 ## Runtime files
 
@@ -84,35 +118,20 @@ ${PI_CODING_AGENT_DIR}/pi-session-refinement/
             └── memory-<generation-id>.md
 ```
 
-`state.json` names and hashes the sole authoritative v2 generation. `memory.md` exists only for read-only v1 compatibility and is removed after a successful rebuild. Superseded generation files are transaction debris, not an archive, and are cleaned best-effort. Runtime files stay outside the installed package and repository. Raw Pi JSONL remains the canonical session history.
-
-## Compatibility and rebuilds
-
-v2 does not migrate older state automatically. A valid v1 memory remains available to the model, but the extension treats it as read-only and warns on every turn until you run:
-
-```text
-/session-refinement-rebuild
-```
-
-The same command creates v2 memory for a historical session that has no refinement files. A rebuild processes the root branch from its beginning. On a v2 fork, it preserves the inherited baseline and processes only fork-local history after the recorded floor. Staging uses the same automatic consolidation rules as normal refinement. Active memory changes only after every segment succeeds.
-
-## Forks
-
-A child receives only the active v2 record prefix valid at the selected fork point. The child records that point as an immutable rebuild floor and starts normal processing after it. It never replays the parent's JSONL automatically. An old fork may inherit little or nothing when it predates the parent's rolling base; this is intentional.
-
-A v1 fork remains legacy and read-only until an explicit rebuild. Rebuild converts a valid inherited v1 baseline and still starts raw reconstruction after the recorded fork floor. If inherited v1 prose is corrupt, the documented lossy rule drops that baseline but retains the floor; parent history is never replayed as a substitute.
-
-## Failure policy
-
-Refinement and consolidation are fail-open. Model resolution uses configured attempts followed by the current session model when available. A failed refinement leaves active memory and its transcript cursor unchanged, so raw JSONL can regenerate the interval.
-
-If every consolidation attempt fails, or no valid candidate creates real headroom, the extension records `consolidation-failed`, pauses automatic refinement for that session, and asks you to run the rebuild command. Pi remains usable. The warning does not disable early context compaction.
-
-Unreadable or inconsistent state follows the same manual-rebuild policy. The extension does not scan sibling sessions, run mass migration, retain permanent old-memory archives, or edit raw history.
+`state.json` names and hashes the authoritative generation. `memory.md` exists only for read-only v1 compatibility and is removed after a successful rebuild. Runtime files use private permissions and stay outside the package repository.
 
 ## Privacy
 
-The repository contains no credentials, personal paths, private model configuration, or session data. Runtime memory uses private file permissions. Each model operation sees only the session material needed for that operation; the consolidator never receives the retained suffix.
+The repository ships code, prompts, examples, and documentation. It contains no runtime memory or session history. Each isolated model operation receives only the material required for that operation; the consolidator never receives the retained suffix.
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Session lifecycle](docs/lifecycle.md)
+- [Configuration](docs/configuration.md)
+- [Memory format](docs/memory-format.md)
+- [Diagram source](docs/session-flow.mmd)
+- [Diagram notes and behavior checklist](docs/session-flow.md)
 
 ## Development
 

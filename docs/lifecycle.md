@@ -2,7 +2,7 @@
 
 ## New sessions
 
-A new persistent session starts with v2 state and no memory records. Trigger counters begin at startup.
+A new persistent session prepares an empty v2 baseline in memory. It publishes state only when the first real prompt reaches `before_agent_start`; idle and command-only processes leave no session store. The first transcript interval remains available for a later checkpoint.
 
 ## Resume and compatibility
 
